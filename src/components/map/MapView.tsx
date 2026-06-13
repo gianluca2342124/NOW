@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { AnimatePresence } from 'framer-motion';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 import type { NowEvent } from '@/types/event';
 import { BARCELONA_CENTER } from '@/lib/geo';
 import { deriveStatus } from '@/lib/time';
+import { relevanceScore } from '@/lib/relevance';
+import { visibleEventIds } from '@/lib/filters';
+import { getBubbleMotion } from '@/lib/bubble';
+import { useNowStore } from '@/store/useNowStore';
 import { EventBubble } from './EventBubble';
+import { UserLocationMarker } from './UserLocationMarker';
+import { RecenterButton } from './RecenterButton';
 import { MapErrorState, type MapErrorVariant } from './MapErrorState';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -14,38 +21,44 @@ const MAPBOX_STYLE =
   import.meta.env.VITE_MAPBOX_STYLE || 'mapbox://styles/mapbox/dark-v11';
 
 interface MapViewProps {
-  /**
-   * Stable list of all events. IMPORTANT: this reference must NOT change every
-   * clock tick — markers are created from it once. Live status is derived
-   * per-render from `now` and applied to the (already-mounted) bubbles.
-   */
+  /** Stable list of all events — reference must NOT change every clock tick. */
   events: NowEvent[];
   now: number;
-  selectedEventId: string | null;
-  onSelect: (id: string) => void;
+  /** Kick off (or re-request) geolocation; owned by App. */
+  onRequestLocation: () => void;
 }
 
 /**
  * Mapbox GL map centered on Barcelona. Each event is a native Mapbox Marker
- * whose DOM container hosts a React-rendered <EventBubble> (via portal).
+ * whose stable DOM container hosts a React-rendered <EventBubble> (via portal).
  *
- * Marker lifecycle is decoupled from the live clock: markers are created once
- * (keyed by stable event identity) and stay mounted. The ticking `now` only
- * updates each bubble's derived status — it never tears down a marker. This is
- * what keeps the map smooth instead of re-mounting every bubble on each tick.
+ * Markers are created once and never torn down by the clock or filters — the
+ * ticking `now`, the live user location and the active filters only update
+ * bubble props / visibility. This is what keeps the map smooth.
  */
-export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps) {
+export function MapView({ events, now, onRequestLocation }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [ready, setReady] = useState(false);
   const [errorVariant, setErrorVariant] = useState<MapErrorVariant | null>(
     MAPBOX_TOKEN ? null : 'missing',
   );
-  // DOM nodes per event id (Marker elements + portal targets), held in state
-  // so portals mount once the markers exist on the map.
   const [markerNodes, setMarkerNodes] = useState<Map<string, HTMLDivElement>>(
     () => new Map(),
   );
+
+  // Store slices
+  const selectedEventId = useNowStore((s) => s.selectedEventId);
+  const selectEvent = useNowStore((s) => s.selectEvent);
+  const timeFilter = useNowStore((s) => s.timeFilter);
+  const activeCategories = useNowStore((s) => s.activeCategories);
+  const userLocation = useNowStore((s) => s.userLocation);
+  const locationStatus = useNowStore((s) => s.locationStatus);
+
+  // User-location marker plumbing
+  const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const [userNode, setUserNode] = useState<HTMLDivElement | null>(null);
+  const hasAutoCenteredRef = useRef(false);
 
   // --- Init map once ---
   useEffect(() => {
@@ -64,19 +77,13 @@ export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps
     });
     mapRef.current = map;
 
-    // Graceful handling for invalid / expired tokens and other fatal errors.
     map.on('error', (e) => {
       const status = (e.error as { status?: number } | undefined)?.status;
-      if (status === 401 || status === 403) {
-        setErrorVariant('auth');
-      } else if (status !== undefined && status >= 400) {
-        setErrorVariant('unknown');
-      }
-      // Non-fatal errors (e.g. a single failed tile) are ignored on purpose.
+      if (status === 401 || status === 403) setErrorVariant('auth');
+      else if (status !== undefined && status >= 400) setErrorVariant('unknown');
     });
 
     map.on('load', () => {
-      // Warm NOW tuning on top of the stock dark style.
       try {
         if (map.getLayer('water')) {
           map.setPaintProperty('water', 'fill-color', '#0a0f1a');
@@ -121,16 +128,72 @@ export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps
       markers.forEach((m) => m.remove());
       setMarkerNodes(new Map());
     };
-    // `now` is intentionally NOT a dependency: markers must survive every tick.
+    // `now` / filters deliberately excluded: markers must survive every tick.
   }, [events, ready]);
 
-  // Live status per event, recomputed each tick. Cheap; updates bubble props
-  // in place without remounting markers.
+  // --- User-location marker: create/update/remove + first-fix auto-center ---
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    if (!userLocation) {
+      userMarkerRef.current?.remove();
+      userMarkerRef.current = null;
+      return;
+    }
+
+    const lngLat: [number, number] = [userLocation.lng, userLocation.lat];
+    if (!userMarkerRef.current) {
+      const node = document.createElement('div');
+      setUserNode(node);
+      userMarkerRef.current = new mapboxgl.Marker({
+        element: node,
+        anchor: 'center',
+      })
+        .setLngLat(lngLat)
+        .addTo(map);
+    } else {
+      userMarkerRef.current.setLngLat(lngLat);
+    }
+
+    // Fly to the user only on the first fix — never yank the camera afterwards.
+    if (!hasAutoCenteredRef.current) {
+      hasAutoCenteredRef.current = true;
+      map.flyTo({ center: lngLat, zoom: 14.5, speed: 1.2, essential: true });
+    }
+  }, [userLocation, ready]);
+
+  // --- Derived per-render data (no marker churn) ---
   const statuses = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof deriveStatus>>();
-    for (const e of events) map.set(e.id, deriveStatus(e, now));
-    return map;
+    const m = new Map<string, ReturnType<typeof deriveStatus>>();
+    for (const e of events) m.set(e.id, deriveStatus(e, now));
+    return m;
   }, [events, now]);
+
+  const relevances = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of events) m.set(e.id, relevanceScore(e, now, userLocation));
+    return m;
+  }, [events, now, userLocation]);
+
+  const visibleIds = useMemo(
+    () => visibleEventIds(events, timeFilter, activeCategories, now),
+    [events, timeFilter, activeCategories, now],
+  );
+
+  const recenter = () => {
+    const map = mapRef.current;
+    if (locationStatus === 'granted' && userLocation && map) {
+      map.flyTo({
+        center: [userLocation.lng, userLocation.lat],
+        zoom: 14.5,
+        speed: 1.2,
+        essential: true,
+      });
+    } else {
+      onRequestLocation();
+    }
+  };
 
   return (
     <div className="absolute inset-0">
@@ -147,24 +210,58 @@ export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps
 
       {errorVariant && <MapErrorState variant={errorVariant} />}
 
+      {/* Empty state — subtle, never clutters the map. */}
+      {!errorVariant && ready && visibleIds.size === 0 && (
+        <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center px-8">
+          <div className="glass rounded-full px-4 py-2 text-sm font-medium text-stone-300">
+            Nothing here right now — try another filter
+          </div>
+        </div>
+      )}
+
+      {/* Recenter control */}
+      {!errorVariant && (
+        <div className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end px-4 pb-2">
+          <div className="pointer-events-auto">
+            <RecenterButton
+              onClick={recenter}
+              active={locationStatus === 'granted' && !!userLocation}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* User location marker (portaled into its Mapbox marker). */}
+      {userNode && userLocation && createPortal(<UserLocationMarker />, userNode)}
+
       {/*
-        Bubbles are portaled into stable marker nodes. A bubble whose event has
-        ended (status null) renders nothing, but its marker stays mounted — no
-        teardown churn. Live status updates flow in as props.
+        Event bubbles portaled into stable marker nodes. Each portal wraps the
+        bubble in <AnimatePresence> so filter changes animate in/out without
+        unmounting the marker. Ended events (status null) simply don't render.
       */}
       {events.map((event) => {
         const node = markerNodes.get(event.id);
         const status = statuses.get(event.id);
         if (!node) return null;
+
+        const relevance = relevances.get(event.id) ?? 0.5;
+        const visible = !!status && visibleIds.has(event.id);
+
+        // Most relevant bubbles stack above calmer ones.
+        node.style.zIndex = String(getBubbleMotion(status ?? 'upcoming', relevance).zIndex);
+
         return createPortal(
-          status ? (
-            <EventBubble
-              event={event}
-              status={status}
-              selected={selectedEventId === event.id}
-              onSelect={onSelect}
-            />
-          ) : null,
+          <AnimatePresence>
+            {visible && status && (
+              <EventBubble
+                event={event}
+                status={status}
+                relevance={relevance}
+                selected={selectedEventId === event.id}
+                onSelect={selectEvent}
+              />
+            )}
+          </AnimatePresence>,
           node,
           event.id,
         );

@@ -4,6 +4,9 @@
  * An event's *status* is not stored — it is derived at render time from
  * `startsAt` / `endsAt` relative to the current clock (see lib/time.ts).
  * This is what lets the map feel alive: bubbles transition on their own.
+ *
+ * The shape is intentionally flat and serialisable so it can later be replaced
+ * by an API response with no changes to consumers.
  */
 
 export type EventCategory =
@@ -12,7 +15,8 @@ export type EventCategory =
   | 'sports'
   | 'culture'
   | 'food'
-  | 'civic';
+  | 'civic'
+  | 'other';
 
 export type EventStatus = 'upcoming' | 'imminent' | 'live' | 'ending';
 
@@ -32,4 +36,11 @@ export interface NowEvent {
   /** ISO 8601 end time. */
   endsAt: string;
   coordinates: LngLat;
+  /**
+   * Editorial weight 0..1 — how much this event should "pull focus" on the
+   * map, independent of timing/proximity. Optional; defaults to 0.5.
+   */
+  importance?: number;
+  /** Optional external link surfaced as a small secondary "Source" action. */
+  sourceUrl?: string;
 }

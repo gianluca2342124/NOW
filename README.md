@@ -4,10 +4,12 @@ A map-first, real-time activity map for Barcelona. Open it and feel the city
 come alive: animated bubbles for what's happening **now**, starting soon, or
 on tonight.
 
-This repository is the **Phase 0 + Phase 1 visual prototype**. It validates the
-core NOW feeling — premium, alive, smooth, mobile-first. There is intentionally
-**no backend, database, auth, accounts, AI, payments, or ingestion** yet. All
-event data is hardcoded.
+This repository is the **Phase 2 public demo**. It makes NOW feel like a real
+premium consumer app: live geolocation, premium iconography, filters, a
+relevance-driven bubble hierarchy, and a refined bottom sheet. There is
+intentionally **no backend, database, auth, accounts, AI, payments, or
+ingestion** yet — all event data is hardcoded in `src/data/events.ts` with a
+shape that mirrors a future API.
 
 ## Tech stack
 
@@ -16,6 +18,7 @@ event data is hardcoded.
 - Tailwind CSS
 - Framer Motion
 - Zustand
+- lucide-react (premium icons)
 - PWA (vite-plugin-pwa)
 - pnpm
 
@@ -46,21 +49,27 @@ browser viewport for the intended experience.
 Without a token the app renders a friendly "add your token" overlay instead of
 the map.
 
-## How to test the prototype
+## How to test the demo
 
-1. Run `pnpm dev` with a valid `VITE_MAPBOX_TOKEN`.
-2. The map loads centered on Barcelona with animated event bubbles.
-3. **Bubble states** — bubbles breathe/pulse at different intensities:
-   - `live` (brightest, fastest pulse) · `ending` · `imminent` · `upcoming`
-   - Status is derived from each event's time relative to the live clock, so
-     bubbles transition on their own (the clock ticks every 15s).
-4. **Categories** — color + glyph per bubble: nightlife, music, sports,
-   culture, food, civic.
-5. **Tap a bubble** → a glassmorphism bottom sheet slides up with title, venue,
-   category, status, time, description and a distance placeholder.
-6. **Go button** → opens Google Maps walking directions to the event.
-7. Dismiss the sheet by dragging it down or tapping the backdrop.
-8. The header shows a live "N live now" pulse counter.
+1. Run `pnpm dev` with a valid `VITE_MAPBOX_TOKEN` (or open the deployed URL).
+2. The map loads centered on Barcelona with animated event bubbles, and a
+   premium **location primer** slides up over the live map.
+3. **Location** — tap *Enable location*: the map flies to you, a refined blue
+   "you are here" marker appears, distances become real, and nearer events grow
+   more prominent. The recenter button (bottom-right) re-centers / re-requests.
+   *Not now* falls back gracefully to Barcelona centre.
+   > Geolocation only works over **HTTPS** (the Vercel URL) or `localhost`, not
+   > over a LAN `http://192.168…` address.
+4. **Bubble hierarchy** — size reflects *relevance* (live + proximity +
+   importance + starting-soon); motion reflects live *status* so `live` events
+   pulse hardest and `upcoming` ones stay calm.
+5. **Filters** — the floating chips filter by time (**Now / Tonight /
+   Tomorrow**) and category (Music, Nightlife, Sports, Culture, Food, Civic).
+   Bubbles animate in/out; markers never churn.
+6. **Tap a bubble** → a refined glass bottom sheet with category icon, status,
+   real distance, time, venue, description, a **Go** button (Google Maps
+   directions) and a small **View source** link when the event has one.
+7. The header shows a live "N live now" pulse counter.
 
 ## Available scripts
 
@@ -75,34 +84,46 @@ pnpm typecheck  # type-check only
 
 ```
 src/
-├── App.tsx                  # composition: map + header + sheet
+├── App.tsx                       # composition: map + header + filters + sheet
 ├── main.tsx
-├── index.css                # Tailwind layers, glass + Mapbox styling
-├── types/event.ts           # NowEvent, EventCategory, EventStatus
-├── data/events.ts           # hardcoded Barcelona events (relative times)
+├── index.css                     # Tailwind layers, glass + Mapbox styling
+├── types/event.ts                # NowEvent, EventCategory, EventStatus
+├── data/events.ts                # 19 curated Barcelona events (relative times)
 ├── lib/
-│   ├── time.ts              # status derivation + time labels
-│   ├── geo.ts               # distance + Google Maps deep link
-│   └── categories.ts        # category & status visual config
-├── store/useNowStore.ts     # Zustand: selected event
-├── hooks/useNow.ts          # ticking live clock
+│   ├── time.ts                   # status derivation + time labels
+│   ├── geo.ts                    # distance + Google Maps deep link
+│   ├── categories.ts             # category (Lucide icons) & status config
+│   ├── filters.ts                # time + category filter predicates
+│   ├── relevance.ts              # blended relevance scoring (bubble size)
+│   └── bubble.ts                 # bubble geometry/motion constants
+├── store/useNowStore.ts          # Zustand: selection, filters, user location
+├── hooks/
+│   ├── useNow.ts                 # ticking live clock
+│   └── useGeolocation.ts         # live watchPosition + permission status
 └── components/
-    ├── map/MapView.tsx      # Mapbox GL init + markers
-    ├── map/EventBubble.tsx  # animated bubble (Framer Motion)
-    ├── sheet/EventSheet.tsx # glassmorphism bottom sheet
-    └── ui/StatusPill.tsx    # status badge
+    ├── map/MapView.tsx           # Mapbox GL init, stable markers, relevance
+    ├── map/EventBubble.tsx       # animated bubble (Framer Motion + Lucide)
+    ├── map/UserLocationMarker.tsx
+    ├── map/RecenterButton.tsx
+    ├── map/MapErrorState.tsx
+    ├── filters/FilterBar.tsx     # floating time + category chips
+    ├── permission/LocationPrimer.tsx
+    ├── sheet/EventSheet.tsx      # glass bottom sheet
+    ├── ui/StatusPill.tsx
+    └── ErrorBoundary.tsx
 ```
 
 ## Notes & known limitations
 
-- **Distance is a placeholder** — measured from Barcelona centre, since there's
-  no geolocation permission flow yet.
+- **Geolocation requires HTTPS** (deployed URL) or `localhost`. Over a LAN
+  `http://` address the browser won't prompt; the app falls back to Barcelona
+  centre and distances read "from centre".
 - **Map style** is stock `dark-v11` with a warm overlay/fog tuning. A custom
   premium Mapbox Studio style can be dropped in later via `VITE_MAPBOX_STYLE`.
-- Event data is hardcoded with times relative to app load, so every bubble
-  state is visible whenever you open the prototype.
-- PWA icons (192/512 + apple-touch-icon) are generated by
-  `pnpm icons` (`scripts/generate-icons.mjs`) and committed to `public/icons`.
-- Bubble animation respects `prefers-reduced-motion` (pulses collapse to a
-  static glow). Invalid/expired/missing Mapbox tokens show a graceful
-  on-brand error state, and the map is wrapped in an error boundary.
+- Event data is hardcoded with times relative to app load, so on every open some
+  events are live, some starting soon, some later tonight, and some tomorrow.
+- PWA icons (192/512 + apple-touch-icon) are generated by `pnpm icons`
+  (`scripts/generate-icons.mjs`) and committed to `public/icons`.
+- All motion respects `prefers-reduced-motion` (pulses collapse to static
+  glows). Missing/invalid/expired Mapbox tokens show a graceful on-brand error
+  state, and the map is wrapped in an error boundary.

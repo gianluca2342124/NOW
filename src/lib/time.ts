@@ -73,7 +73,7 @@ function formatDay(ts: number): string {
   });
 }
 
-function isSameDay(a: number, b: number): boolean {
+export function isSameDay(a: number, b: number): boolean {
   const da = new Date(a);
   const db = new Date(b);
   return (

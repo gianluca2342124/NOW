@@ -10,6 +10,10 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['now.svg', 'icons/apple-touch-icon.png'],
+      workbox: {
+        // mapbox-gl is a large but cacheable vendor chunk.
+        maximumFileSizeToCacheInBytes: 3_000_000,
+      },
       manifest: {
         name: 'NOW — Barcelona',
         short_name: 'NOW',
@@ -45,6 +49,16 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+    },
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        // Split the heavy map vendor out of the app chunk for better caching.
+        manualChunks: {
+          mapbox: ['mapbox-gl'],
+        },
+      },
     },
   },
 });

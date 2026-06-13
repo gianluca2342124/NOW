@@ -4,18 +4,21 @@ import { STATUS_CONFIG } from '@/lib/categories';
 /**
  * Bubble geometry + motion constants.
  *
- * These used to live as magic numbers inside <EventBubble>. Centralising them
- * keeps the visual language tunable in one place and the component declarative.
- * Everything scales off a status's `intensity` (0..1) so a "live" event reads
- * as more alive than an "upcoming" one.
+ * Two independent signals shape a bubble:
+ *   - `relevance` (0..1) drives SIZE — the visual hierarchy (see lib/relevance).
+ *   - status `intensity` (0..1) drives MOTION — how alive it feels.
+ *
+ * Keeping these separate is deliberate: a far-away live event still *pulses*
+ * like it's live, but a near, important, live event reads *bigger*. This is
+ * what makes the map feel intentional instead of chaotic.
  */
 export const BUBBLE = {
   /** Minimum clickable hit area (px). HIG-compliant tap target. */
   hitArea: 44,
 
-  /** Visible core diameter (px) = base + range * intensity. */
-  coreSizeBase: 30,
-  coreSizeRange: 14,
+  /** Visible core diameter (px) = base + range * relevance. */
+  coreSizeBase: 26,
+  coreSizeRange: 22,
 
   /** Ambient glow diameter as a multiple of the core. */
   glowSizeFactor: 1.5,
@@ -33,8 +36,12 @@ export const BUBBLE = {
   haloDurationExtra: 0.6,
   haloMaxScale: 2.4,
 
-  /** Glyph font-size as a fraction of the core diameter. */
-  glyphFactor: 0.46,
+  /** Icon size as a fraction of the core diameter. */
+  iconFactor: 0.5,
+
+  /** Higher-relevance bubbles stack above calmer ones. */
+  zIndexBase: 1,
+  zIndexRange: 1000,
 } as const;
 
 export interface BubbleMotion {
@@ -45,14 +52,24 @@ export interface BubbleMotion {
   breatheDuration: number;
   haloDuration: number;
   showHalo: boolean;
-  glyphSize: number;
+  iconSize: number;
+  /** Motion intensity (status-led). */
   intensity: number;
+  /** Stacking order so the most relevant bubbles sit on top. */
+  zIndex: number;
 }
 
-/** Resolve all derived bubble dimensions/timings for a given status. */
-export function getBubbleMotion(status: EventStatus): BubbleMotion {
+/**
+ * Resolve all derived bubble dimensions/timings.
+ * @param status   live status → motion intensity
+ * @param relevance 0..1 blended score → size + stacking (defaults to 0.5)
+ */
+export function getBubbleMotion(
+  status: EventStatus,
+  relevance = 0.5,
+): BubbleMotion {
   const { intensity } = STATUS_CONFIG[status];
-  const coreSize = BUBBLE.coreSizeBase + BUBBLE.coreSizeRange * intensity;
+  const coreSize = BUBBLE.coreSizeBase + BUBBLE.coreSizeRange * relevance;
   const breatheDuration =
     BUBBLE.breatheDurationMax - BUBBLE.breatheDurationRange * intensity;
 
@@ -65,6 +82,7 @@ export function getBubbleMotion(status: EventStatus): BubbleMotion {
     breatheDuration,
     haloDuration: breatheDuration + BUBBLE.haloDurationExtra,
     showHalo: intensity >= BUBBLE.haloThreshold,
-    glyphSize: coreSize * BUBBLE.glyphFactor,
+    iconSize: coreSize * BUBBLE.iconFactor,
+    zIndex: Math.round(BUBBLE.zIndexBase + BUBBLE.zIndexRange * relevance),
   };
 }

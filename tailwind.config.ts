@@ -29,6 +29,7 @@ export default {
           culture: '#38bdf8',
           food: '#fb923c',
           civic: '#f43f5e',
+          other: '#fbbf24',
         },
       },
       fontFamily: {
