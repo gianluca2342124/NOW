@@ -4,12 +4,23 @@ A map-first, real-time activity map for Barcelona. Open it and feel the city
 come alive: animated bubbles for what's happening **now**, starting soon, or
 on tonight.
 
-This repository is the **Phase 2 public demo**. It makes NOW feel like a real
-premium consumer app: live geolocation, premium iconography, filters, a
-relevance-driven bubble hierarchy, and a refined bottom sheet. There is
-intentionally **no backend, database, auth, accounts, AI, payments, or
-ingestion** yet — all event data is hardcoded in `src/data/events.ts` with a
-shape that mirrors a future API.
+This repository is the **Phase 3 honest preview**. The priority is **trust**:
+NOW must never claim something is live unless the data justifies it. It adds an
+activity verification model, a confidence score, source attribution, and an
+ingestion architecture — while making **zero** fake "Live now" claims.
+
+**Honesty contract:** the demo dataset is `curated` (with some source-linked
+`verified`/`official_source` items) and carries `verifiedLive: false`
+everywhere, so the app shows no live claims at all. The city feels alive through
+animation and honest "On now / Tonight" scheduling, never through fabrication.
+See **[`TRUST_MODEL.md`](./TRUST_MODEL.md)**,
+**[`DATA_SOURCES.md`](./DATA_SOURCES.md)** and
+**[`INGESTION_ARCHITECTURE.md`](./INGESTION_ARCHITECTURE.md)**.
+
+There is intentionally **no backend, database, auth, accounts, AI, payments, or
+automated ingestion** yet. Activities come from a local curated adapter
+(`src/data/activities.ts`) that emits the same normalized `Activity` shape real
+networked adapters will produce.
 
 ## Tech stack
 
@@ -112,6 +123,26 @@ src/
     ├── ui/StatusPill.tsx
     └── ErrorBoundary.tsx
 ```
+
+## Trust & data honesty (Phase 3)
+
+- **No fake live.** `live_now` is gated behind `verifiedLive === true` + a valid
+  `[startsAt, endsAt)` window + an `official_source`/`verified` status. The
+  curated demo sets `verifiedLive: false` everywhere → zero live claims.
+  (`src/lib/status.ts`, single auditable path.)
+- **Verification model.** Every activity is `official_source` / `verified` /
+  `curated` / `community_reported` / `unknown`. Without a `sourceUrl`, an item
+  can never show as "Verified" — it downgrades to "Curated".
+- **Confidence score.** `src/lib/confidence.ts` blends verification weight,
+  source presence, freshness (`lastCheckedAt`) and provider baseline; surfaced
+  as High/Medium/Low.
+- **Source attribution.** The sheet shows a verification badge, source name,
+  "Checked …" freshness, and a "View source" link when available. A global
+  "Curated preview" chip discloses the dataset isn't live-verified.
+- **Ingestion architecture.** `src/ingestion/` implements a source-pluggable
+  pipeline (adapter → normalize → confidence → dedupe). The curated adapter is
+  live; networked adapters are scaffolded and need the serverless layer
+  described in `INGESTION_ARCHITECTURE.md`.
 
 ## Notes & known limitations
 

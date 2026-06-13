@@ -1,4 +1,4 @@
-import type { LngLat } from '@/types/event';
+import type { LngLat } from '@/types/activity';
 
 /** Approximate centre of Barcelona — the map's default home. */
 export const BARCELONA_CENTER: LngLat = { lng: 2.1734, lat: 41.3851 };

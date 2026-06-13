@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import type { EventCategory } from '@/types/event';
+import type { EventCategory } from '@/types/activity';
 import { CATEGORY_CONFIG, CATEGORY_ORDER } from '@/lib/categories';
 import { TIME_FILTERS } from '@/lib/filters';
 import { useNowStore } from '@/store/useNowStore';

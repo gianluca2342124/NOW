@@ -1,18 +1,18 @@
 import { create } from 'zustand';
-import type { EventCategory, LngLat } from '@/types/event';
-import type { TimeFilter } from '@/lib/filters';
+import type { EventCategory, LngLat } from '@/types/activity';
+import type { TimeFilter, TrustFilter } from '@/lib/filters';
 
 export type LocationStatus =
-  | 'idle' // not asked yet (primer can show)
-  | 'requesting' // native prompt in flight
+  | 'idle'
+  | 'requesting'
   | 'granted'
   | 'denied'
   | 'unavailable';
 
 interface NowState {
-  /** Currently selected event (opens the bottom sheet), or null. */
-  selectedEventId: string | null;
-  selectEvent: (id: string) => void;
+  /** Currently selected activity (opens the bottom sheet), or null. */
+  selectedActivityId: string | null;
+  selectActivity: (id: string) => void;
   clearSelection: () => void;
 
   // --- Filters ---
@@ -22,6 +22,9 @@ interface NowState {
   activeCategories: Set<EventCategory>;
   toggleCategory: (c: EventCategory) => void;
   clearCategories: () => void;
+  /** Internal trust filter — not yet exposed in the UI. */
+  trustFilter: TrustFilter;
+  setTrustFilter: (t: TrustFilter) => void;
 
   // --- Geolocation ---
   userLocation: LngLat | null;
@@ -31,9 +34,9 @@ interface NowState {
 }
 
 export const useNowStore = create<NowState>((set) => ({
-  selectedEventId: null,
-  selectEvent: (id) => set({ selectedEventId: id }),
-  clearSelection: () => set({ selectedEventId: null }),
+  selectedActivityId: null,
+  selectActivity: (id) => set({ selectedActivityId: id }),
+  clearSelection: () => set({ selectedActivityId: null }),
 
   timeFilter: 'now',
   setTimeFilter: (timeFilter) => set({ timeFilter }),
@@ -46,6 +49,8 @@ export const useNowStore = create<NowState>((set) => ({
       return { activeCategories: next };
     }),
   clearCategories: () => set({ activeCategories: new Set<EventCategory>() }),
+  trustFilter: 'all',
+  setTrustFilter: (trustFilter) => set({ trustFilter }),
 
   userLocation: null,
   locationStatus: 'idle',

@@ -4,14 +4,15 @@ import { AnimatePresence } from 'framer-motion';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
-import type { NowEvent } from '@/types/event';
+import type { Activity } from '@/types/activity';
 import { BARCELONA_CENTER } from '@/lib/geo';
-import { deriveStatus } from '@/lib/time';
-import { relevanceScore } from '@/lib/relevance';
-import { visibleEventIds } from '@/lib/filters';
+import { deriveDisplayStatus, deriveTimeState } from '@/lib/status';
+import { INTENSITY_BY_TIME_STATE } from '@/lib/categories';
+import { emphasisScore } from '@/lib/emphasis';
+import { visibleActivityIds } from '@/lib/filters';
 import { getBubbleMotion } from '@/lib/bubble';
 import { useNowStore } from '@/store/useNowStore';
-import { EventBubble } from './EventBubble';
+import { ActivityBubble } from './ActivityBubble';
 import { UserLocationMarker } from './UserLocationMarker';
 import { RecenterButton } from './RecenterButton';
 import { MapErrorState, type MapErrorVariant } from './MapErrorState';
@@ -21,22 +22,22 @@ const MAPBOX_STYLE =
   import.meta.env.VITE_MAPBOX_STYLE || 'mapbox://styles/mapbox/dark-v11';
 
 interface MapViewProps {
-  /** Stable list of all events — reference must NOT change every clock tick. */
-  events: NowEvent[];
+  /** Stable list of all activities — reference must NOT change every tick. */
+  activities: Activity[];
   now: number;
   /** Kick off (or re-request) geolocation; owned by App. */
   onRequestLocation: () => void;
 }
 
 /**
- * Mapbox GL map centered on Barcelona. Each event is a native Mapbox Marker
- * whose stable DOM container hosts a React-rendered <EventBubble> (via portal).
+ * Mapbox GL map centered on Barcelona. Each activity is a native Mapbox Marker
+ * whose stable DOM container hosts a React-rendered <ActivityBubble> (portal).
  *
  * Markers are created once and never torn down by the clock or filters — the
  * ticking `now`, the live user location and the active filters only update
- * bubble props / visibility. This is what keeps the map smooth.
+ * bubble props / visibility. Honest display status is derived per render.
  */
-export function MapView({ events, now, onRequestLocation }: MapViewProps) {
+export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [ready, setReady] = useState(false);
@@ -47,15 +48,14 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
     () => new Map(),
   );
 
-  // Store slices
-  const selectedEventId = useNowStore((s) => s.selectedEventId);
-  const selectEvent = useNowStore((s) => s.selectEvent);
+  const selectedActivityId = useNowStore((s) => s.selectedActivityId);
+  const selectActivity = useNowStore((s) => s.selectActivity);
   const timeFilter = useNowStore((s) => s.timeFilter);
   const activeCategories = useNowStore((s) => s.activeCategories);
+  const trustFilter = useNowStore((s) => s.trustFilter);
   const userLocation = useNowStore((s) => s.userLocation);
   const locationStatus = useNowStore((s) => s.locationStatus);
 
-  // User-location marker plumbing
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const [userNode, setUserNode] = useState<HTMLDivElement | null>(null);
   const hasAutoCenteredRef = useRef(false);
@@ -107,18 +107,18 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
     };
   }, []);
 
-  // --- Create one Marker per event, ONCE (stable identity, not the clock) ---
+  // --- Create one Marker per activity, ONCE (stable identity, not the clock) ---
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
 
     const markers: mapboxgl.Marker[] = [];
     const nodes = new Map<string, HTMLDivElement>();
-    for (const event of events) {
+    for (const activity of activities) {
       const node = document.createElement('div');
-      nodes.set(event.id, node);
+      nodes.set(activity.id, node);
       const marker = new mapboxgl.Marker({ element: node, anchor: 'center' })
-        .setLngLat([event.coordinates.lng, event.coordinates.lat])
+        .setLngLat([activity.coordinates.lng, activity.coordinates.lat])
         .addTo(map);
       markers.push(marker);
     }
@@ -129,7 +129,7 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
       setMarkerNodes(new Map());
     };
     // `now` / filters deliberately excluded: markers must survive every tick.
-  }, [events, ready]);
+  }, [activities, ready]);
 
   // --- User-location marker: create/update/remove + first-fix auto-center ---
   useEffect(() => {
@@ -146,17 +146,13 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
     if (!userMarkerRef.current) {
       const node = document.createElement('div');
       setUserNode(node);
-      userMarkerRef.current = new mapboxgl.Marker({
-        element: node,
-        anchor: 'center',
-      })
+      userMarkerRef.current = new mapboxgl.Marker({ element: node, anchor: 'center' })
         .setLngLat(lngLat)
         .addTo(map);
     } else {
       userMarkerRef.current.setLngLat(lngLat);
     }
 
-    // Fly to the user only on the first fix — never yank the camera afterwards.
     if (!hasAutoCenteredRef.current) {
       hasAutoCenteredRef.current = true;
       map.flyTo({ center: lngLat, zoom: 14.5, speed: 1.2, essential: true });
@@ -164,21 +160,30 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
   }, [userLocation, ready]);
 
   // --- Derived per-render data (no marker churn) ---
-  const statuses = useMemo(() => {
-    const m = new Map<string, ReturnType<typeof deriveStatus>>();
-    for (const e of events) m.set(e.id, deriveStatus(e, now));
+  const displayStatuses = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof deriveDisplayStatus>>();
+    for (const a of activities) m.set(a.id, deriveDisplayStatus(a, now));
     return m;
-  }, [events, now]);
+  }, [activities, now]);
 
-  const relevances = useMemo(() => {
+  const intensities = useMemo(() => {
     const m = new Map<string, number>();
-    for (const e of events) m.set(e.id, relevanceScore(e, now, userLocation));
+    for (const a of activities) {
+      m.set(a.id, INTENSITY_BY_TIME_STATE[deriveTimeState(a, now)]);
+    }
     return m;
-  }, [events, now, userLocation]);
+  }, [activities, now]);
+
+  const emphases = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of activities) m.set(a.id, emphasisScore(a, now, userLocation));
+    return m;
+  }, [activities, now, userLocation]);
 
   const visibleIds = useMemo(
-    () => visibleEventIds(events, timeFilter, activeCategories, now),
-    [events, timeFilter, activeCategories, now],
+    () =>
+      visibleActivityIds(activities, timeFilter, activeCategories, now, trustFilter),
+    [activities, timeFilter, activeCategories, now, trustFilter],
   );
 
   const recenter = () => {
@@ -199,7 +204,6 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
     <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" />
 
-      {/* Warm vignette overlay reinforces the "NOW" mood. */}
       <div
         className="pointer-events-none absolute inset-0"
         style={{
@@ -210,7 +214,6 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
 
       {errorVariant && <MapErrorState variant={errorVariant} />}
 
-      {/* Empty state — subtle, never clutters the map. */}
       {!errorVariant && ready && visibleIds.size === 0 && (
         <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center px-8">
           <div className="glass rounded-full px-4 py-2 text-sm font-medium text-stone-300">
@@ -219,7 +222,6 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
         </div>
       )}
 
-      {/* Recenter control */}
       {!errorVariant && (
         <div className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end px-4 pb-2">
           <div className="pointer-events-auto">
@@ -231,39 +233,35 @@ export function MapView({ events, now, onRequestLocation }: MapViewProps) {
         </div>
       )}
 
-      {/* User location marker (portaled into its Mapbox marker). */}
       {userNode && userLocation && createPortal(<UserLocationMarker />, userNode)}
 
-      {/*
-        Event bubbles portaled into stable marker nodes. Each portal wraps the
-        bubble in <AnimatePresence> so filter changes animate in/out without
-        unmounting the marker. Ended events (status null) simply don't render.
-      */}
-      {events.map((event) => {
-        const node = markerNodes.get(event.id);
-        const status = statuses.get(event.id);
+      {activities.map((activity) => {
+        const node = markerNodes.get(activity.id);
         if (!node) return null;
 
-        const relevance = relevances.get(event.id) ?? 0.5;
-        const visible = !!status && visibleIds.has(event.id);
+        const displayStatus = displayStatuses.get(activity.id) ?? 'unverified';
+        const intensity = intensities.get(activity.id) ?? 0.3;
+        const emphasis = emphases.get(activity.id) ?? 0.5;
+        const visible =
+          displayStatus !== 'ended' && visibleIds.has(activity.id);
 
-        // Most relevant bubbles stack above calmer ones.
-        node.style.zIndex = String(getBubbleMotion(status ?? 'upcoming', relevance).zIndex);
+        node.style.zIndex = String(getBubbleMotion(intensity, emphasis).zIndex);
 
         return createPortal(
           <AnimatePresence>
-            {visible && status && (
-              <EventBubble
-                event={event}
-                status={status}
-                relevance={relevance}
-                selected={selectedEventId === event.id}
-                onSelect={selectEvent}
+            {visible && (
+              <ActivityBubble
+                activity={activity}
+                displayStatus={displayStatus}
+                intensity={intensity}
+                emphasis={emphasis}
+                selected={selectedActivityId === activity.id}
+                onSelect={selectActivity}
               />
             )}
           </AnimatePresence>,
           node,
-          event.id,
+          activity.id,
         );
       })}
     </div>

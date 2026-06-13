@@ -1,16 +1,13 @@
-import type { EventStatus } from '@/types/event';
-import { STATUS_CONFIG } from '@/lib/categories';
-
 /**
  * Bubble geometry + motion constants.
  *
  * Two independent signals shape a bubble:
- *   - `relevance` (0..1) drives SIZE — the visual hierarchy (see lib/relevance).
- *   - status `intensity` (0..1) drives MOTION — how alive it feels.
+ *   - `emphasis` (0..1) drives SIZE — the visual hierarchy (see lib/emphasis).
+ *   - `intensity` (0..1) drives MOTION — ambient aliveness by time-state.
  *
- * Keeping these separate is deliberate: a far-away live event still *pulses*
- * like it's live, but a near, important, live event reads *bigger*. This is
- * what makes the map feel intentional instead of chaotic.
+ * Keeping these separate is deliberate: a near, important activity reads
+ * *bigger*, while timeliness controls how much it *breathes*. The bright "live
+ * ring" (a real truth claim) is applied by the bubble only for `live_now`.
  */
 export const BUBBLE = {
   /** Minimum clickable hit area (px). HIG-compliant tap target. */
@@ -61,15 +58,11 @@ export interface BubbleMotion {
 
 /**
  * Resolve all derived bubble dimensions/timings.
- * @param status   live status → motion intensity
- * @param relevance 0..1 blended score → size + stacking (defaults to 0.5)
+ * @param intensity 0..1 ambient motion (from time-state)
+ * @param emphasis  0..1 blended emphasis → size + stacking (defaults to 0.5)
  */
-export function getBubbleMotion(
-  status: EventStatus,
-  relevance = 0.5,
-): BubbleMotion {
-  const { intensity } = STATUS_CONFIG[status];
-  const coreSize = BUBBLE.coreSizeBase + BUBBLE.coreSizeRange * relevance;
+export function getBubbleMotion(intensity: number, emphasis = 0.5): BubbleMotion {
+  const coreSize = BUBBLE.coreSizeBase + BUBBLE.coreSizeRange * emphasis;
   const breatheDuration =
     BUBBLE.breatheDurationMax - BUBBLE.breatheDurationRange * intensity;
 
@@ -83,6 +76,6 @@ export function getBubbleMotion(
     haloDuration: breatheDuration + BUBBLE.haloDurationExtra,
     showHalo: intensity >= BUBBLE.haloThreshold,
     iconSize: coreSize * BUBBLE.iconFactor,
-    zIndex: Math.round(BUBBLE.zIndexBase + BUBBLE.zIndexRange * relevance),
+    zIndex: Math.round(BUBBLE.zIndexBase + BUBBLE.zIndexRange * emphasis),
   };
 }

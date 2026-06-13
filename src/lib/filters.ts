@@ -1,5 +1,5 @@
-import type { EventCategory, NowEvent } from '@/types/event';
-import { deriveStatus, isSameDay } from '@/lib/time';
+import type { Activity, EventCategory } from '@/types/activity';
+import { deriveTimeState } from '@/lib/status';
 
 export type TimeFilter = 'now' | 'tonight' | 'tomorrow';
 
@@ -9,49 +9,62 @@ export const TIME_FILTERS: { id: TimeFilter; label: string }[] = [
   { id: 'tomorrow', label: 'Tomorrow' },
 ];
 
-const DAY = 24 * 60 * 60 * 1000;
+/** Internal trust filter — not yet exposed in the UI (see TRUST_MODEL.md). */
+export type TrustFilter = 'all' | 'verified_plus';
 
-/** Does an event pass the active time window? */
+/**
+ * Time filtering uses the FACTUAL time-state, not the display label — filtering
+ * by when things actually happen is always honest; only the "live" *claim* is
+ * gated.
+ */
 export function passesTimeFilter(
-  event: NowEvent,
+  activity: Activity,
   filter: TimeFilter,
   now: number,
 ): boolean {
-  const status = deriveStatus(event, now);
-  if (status === null) return false; // already over
-
-  const start = new Date(event.startsAt).getTime();
+  const ts = deriveTimeState(activity, now);
+  if (ts === 'ended') return false;
 
   switch (filter) {
     case 'now':
-      // Happening right now or within the imminent window.
-      return status === 'live' || status === 'ending' || status === 'imminent';
+      return ts === 'ongoing' || ts === 'soon';
     case 'tonight':
-      // Anything on today's calendar date that hasn't ended (incl. live).
-      return status === 'live' || status === 'ending' || isSameDay(start, now);
+      return ts === 'ongoing' || ts === 'soon' || ts === 'today';
     case 'tomorrow':
-      return isSameDay(start, now + DAY);
+      return ts === 'tomorrow';
     default:
       return true;
   }
 }
 
+export function passesTrustFilter(
+  activity: Activity,
+  filter: TrustFilter,
+): boolean {
+  if (filter === 'all') return true;
+  return (
+    activity.verificationStatus === 'official_source' ||
+    activity.verificationStatus === 'verified'
+  );
+}
+
 /**
- * Apply the active time + category filters. Returns the set of visible event
- * ids — the map keeps every marker mounted and toggles bubble visibility, so
- * this never causes marker churn.
+ * Visible activity ids for the active filters. The map keeps every marker
+ * mounted and toggles bubble visibility, so this never causes marker churn.
  */
-export function visibleEventIds(
-  events: NowEvent[],
+export function visibleActivityIds(
+  activities: Activity[],
   timeFilter: TimeFilter,
   activeCategories: ReadonlySet<EventCategory>,
   now: number,
+  trustFilter: TrustFilter = 'all',
 ): Set<string> {
   const ids = new Set<string>();
-  for (const e of events) {
-    if (!passesTimeFilter(e, timeFilter, now)) continue;
-    if (activeCategories.size > 0 && !activeCategories.has(e.category)) continue;
-    ids.add(e.id);
+  for (const a of activities) {
+    if (!passesTimeFilter(a, timeFilter, now)) continue;
+    if (activeCategories.size > 0 && !activeCategories.has(a.category)) continue;
+    if (!passesTrustFilter(a, trustFilter)) continue;
+    ids.add(a.id);
   }
   return ids;
 }

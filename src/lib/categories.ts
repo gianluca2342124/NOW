@@ -1,14 +1,20 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Drama,
+  Image,
   Martini,
   Megaphone,
   Music,
+  ShoppingBag,
   Sparkles,
   Trophy,
   UtensilsCrossed,
 } from 'lucide-react';
-import type { EventCategory, EventStatus } from '@/types/event';
+import type {
+  DisplayStatus,
+  EventCategory,
+  TimeState,
+} from '@/types/activity';
 
 export interface CategoryConfig {
   label: string;
@@ -25,10 +31,12 @@ export const CATEGORY_CONFIG: Record<EventCategory, CategoryConfig> = {
   culture: { label: 'Culture', color: '#38bdf8', icon: Drama },
   food: { label: 'Food', color: '#fb923c', icon: UtensilsCrossed },
   civic: { label: 'Civic', color: '#f43f5e', icon: Megaphone },
+  market: { label: 'Markets', color: '#34d399', icon: ShoppingBag },
+  exhibition: { label: 'Exhibitions', color: '#818cf8', icon: Image },
   other: { label: 'Other', color: '#fbbf24', icon: Sparkles },
 };
 
-/** Stable ordering for the filter chip row. */
+/** Categories offered as filter chips (everything except the catch-all). */
 export const CATEGORY_ORDER: EventCategory[] = [
   'music',
   'nightlife',
@@ -36,19 +44,36 @@ export const CATEGORY_ORDER: EventCategory[] = [
   'culture',
   'food',
   'civic',
+  'market',
+  'exhibition',
 ];
 
-export interface StatusConfig {
+export interface DisplayStatusConfig {
   label: string;
-  /** Accent color for the status pill. */
   color: string;
-  /** Relative animation intensity 0..1 — drives bubble "aliveness". */
-  intensity: number;
+  /** Only `live_now` gets the "hot" live treatment. */
+  hot: boolean;
 }
 
-export const STATUS_CONFIG: Record<EventStatus, StatusConfig> = {
-  upcoming: { label: 'Upcoming', color: '#94a3b8', intensity: 0.25 },
-  imminent: { label: 'Starting soon', color: '#fbbf24', intensity: 0.6 },
-  live: { label: 'Live now', color: '#f59e0b', intensity: 1 },
-  ending: { label: 'Ending soon', color: '#fb7185', intensity: 0.8 },
+export const DISPLAY_STATUS_CONFIG: Record<DisplayStatus, DisplayStatusConfig> = {
+  live_now: { label: 'Live now', color: '#f59e0b', hot: true },
+  starting_soon: { label: 'Starting soon', color: '#fbbf24', hot: false },
+  tonight: { label: 'Tonight', color: '#7dd3fc', hot: false },
+  tomorrow: { label: 'Tomorrow', color: '#94a3b8', hot: false },
+  ended: { label: 'Ended', color: '#78716c', hot: false },
+  unverified: { label: 'Unverified', color: '#a8a29e', hot: false },
+};
+
+/**
+ * Ambient motion intensity by factual time-state (0..1). This is *aliveness*,
+ * not a truth claim — a curated activity can breathe softly without asserting
+ * it is verified-live. The bright "live ring" is reserved for `live_now` only.
+ */
+export const INTENSITY_BY_TIME_STATE: Record<TimeState, number> = {
+  ongoing: 0.7,
+  soon: 0.55,
+  today: 0.4,
+  tomorrow: 0.28,
+  later: 0.22,
+  ended: 0,
 };

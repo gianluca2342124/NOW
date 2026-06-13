@@ -1,14 +1,16 @@
-import type { EventStatus } from '@/types/event';
-import { STATUS_CONFIG } from '@/lib/categories';
+import type { DisplayStatus } from '@/types/activity';
+import { DISPLAY_STATUS_CONFIG } from '@/lib/categories';
 
 interface StatusPillProps {
-  status: EventStatus;
+  status: DisplayStatus;
 }
 
-/** Small live-status badge. Pulses a dot for live/ending states. */
+/**
+ * Display-status badge. Only `live_now` gets the pulsing "hot" treatment — the
+ * single visual that asserts real-world liveness (see TRUST_MODEL.md).
+ */
 export function StatusPill({ status }: StatusPillProps) {
-  const config = STATUS_CONFIG[status];
-  const isHot = status === 'live' || status === 'ending';
+  const config = DISPLAY_STATUS_CONFIG[status];
 
   return (
     <span
@@ -20,7 +22,7 @@ export function StatusPill({ status }: StatusPillProps) {
       }}
     >
       <span
-        className={`h-1.5 w-1.5 rounded-full ${isHot ? 'animate-ping-slow' : ''}`}
+        className={`h-1.5 w-1.5 rounded-full ${config.hot ? 'animate-ping-slow' : ''}`}
         style={{ backgroundColor: config.color }}
       />
       {config.label}

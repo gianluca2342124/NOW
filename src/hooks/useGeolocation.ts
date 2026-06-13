@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import type { LngLat } from '@/types/event';
+import type { LngLat } from '@/types/activity';
 import { distanceKm } from '@/lib/geo';
 import { useNowStore } from '@/store/useNowStore';
 

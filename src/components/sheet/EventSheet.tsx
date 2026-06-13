@@ -1,54 +1,59 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUpRight, MapPin } from 'lucide-react';
-import type { NowEvent } from '@/types/event';
+import type { Activity } from '@/types/activity';
 import { CATEGORY_CONFIG } from '@/lib/categories';
-import { deriveStatus, formatTimeLabel } from '@/lib/time';
+import { deriveDisplayStatus } from '@/lib/status';
+import { formatScheduleLabel, formatCheckedAt } from '@/lib/time';
 import {
   BARCELONA_CENTER,
   distanceKm,
   formatDistance,
   googleMapsDirectionsUrl,
 } from '@/lib/geo';
+import { effectiveVerification, VERIFICATION_CONFIG } from '@/lib/verification';
 import { useNowStore } from '@/store/useNowStore';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { VerificationBadge } from '@/components/ui/VerificationBadge';
 
 interface EventSheetProps {
-  event: NowEvent | null;
+  activity: Activity | null;
   now: number;
   onClose: () => void;
 }
 
 /**
- * Glassmorphism bottom sheet with an iOS / Apple Maps / VisionOS feel. Slides
- * up on select; drag-down or backdrop-tap to dismiss. Distance is measured from
- * the live user location when available, otherwise from Barcelona centre.
+ * Trust-layer bottom sheet (Apple Maps / VisionOS feel). Leads with the
+ * activity, states an honest schedule + status, and always shows where the
+ * information came from. Distance is from the live user location when available.
  */
-export function EventSheet({ event, now, onClose }: EventSheetProps) {
+export function EventSheet({ activity, now, onClose }: EventSheetProps) {
   return (
     <AnimatePresence>
-      {event && (
-        <Sheet key={event.id} event={event} now={now} onClose={onClose} />
+      {activity && (
+        <Sheet key={activity.id} activity={activity} now={now} onClose={onClose} />
       )}
     </AnimatePresence>
   );
 }
 
 function Sheet({
-  event,
+  activity,
   now,
   onClose,
 }: {
-  event: NowEvent;
+  activity: Activity;
   now: number;
   onClose: () => void;
 }) {
   const userLocation = useNowStore((s) => s.userLocation);
-  const category = CATEGORY_CONFIG[event.category];
+  const category = CATEGORY_CONFIG[activity.category];
   const Icon = category.icon;
-  const status = deriveStatus(event, now) ?? 'upcoming';
+  const displayStatus = deriveDisplayStatus(activity, now);
+  const verification = effectiveVerification(activity);
+  const trustBlurb = VERIFICATION_CONFIG[verification].blurb;
 
   const origin = userLocation ?? BARCELONA_CENTER;
-  const km = distanceKm(origin, event.coordinates);
+  const km = distanceKm(origin, activity.coordinates);
   const distanceLabel = userLocation
     ? formatDistance(km)
     : `${formatDistance(km).replace(' away', '')} from centre`;
@@ -78,8 +83,8 @@ function Sheet({
       >
         <div className="mx-auto mb-5 h-1.5 w-11 rounded-full bg-white/20" />
 
-        {/* Header row: category icon + status */}
-        <div className="mb-4 flex items-center justify-between gap-3">
+        {/* Header: category + status */}
+        <div className="mb-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <span
               className="grid h-9 w-9 place-items-center rounded-xl"
@@ -88,48 +93,57 @@ function Sheet({
                 boxShadow: `inset 0 0 0 1px ${category.color}40`,
               }}
             >
-              <Icon
-                className="h-[18px] w-[18px]"
-                strokeWidth={2.25}
-                color={category.color}
-              />
+              <Icon className="h-[18px] w-[18px]" strokeWidth={2.25} color={category.color} />
             </span>
-            <span
-              className="text-sm font-semibold"
-              style={{ color: category.color }}
-            >
+            <span className="text-sm font-semibold" style={{ color: category.color }}>
               {category.label}
             </span>
           </div>
-          <StatusPill status={status} />
+          <StatusPill status={displayStatus} />
         </div>
 
-        {/* Title + venue */}
-        <h2 className="text-[26px] font-extrabold leading-tight tracking-tight">
-          {event.title}
+        {/* Activity-first headline */}
+        <p
+          className="text-xs font-bold uppercase tracking-[0.14em]"
+          style={{ color: category.color }}
+        >
+          {activity.activityLabel}
+        </p>
+        <h2 className="mt-1 text-[26px] font-extrabold leading-tight tracking-tight">
+          {activity.title}
         </h2>
         <div className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-stone-400">
           <MapPin className="h-4 w-4" strokeWidth={2} />
-          {event.venue}
+          {activity.venueName} · {activity.neighborhood}
         </div>
 
-        {/* Meta row: time · distance */}
-        <div className="mt-4 flex items-center gap-3 text-sm">
+        {/* Schedule · distance · price */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
           <span className="font-semibold text-now-soft">
-            {formatTimeLabel(event, now)}
+            {formatScheduleLabel(activity, now)}
           </span>
           <span className="h-1 w-1 rounded-full bg-stone-600" />
           <span className="text-stone-300">{distanceLabel}</span>
+          <span className="h-1 w-1 rounded-full bg-stone-600" />
+          <span className="text-stone-300">{activity.priceLabel}</span>
+        </div>
+
+        {/* Trust row: verification + source + freshness */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <VerificationBadge activity={activity} now={now} showConfidence />
+          <span className="text-xs text-stone-500">
+            {trustBlurb} · {activity.sourceName} · {formatCheckedAt(activity.lastCheckedAt, now)}
+          </span>
         </div>
 
         {/* Description */}
         <p className="mt-4 text-[15px] leading-relaxed text-stone-300">
-          {event.description}
+          {activity.description}
         </p>
 
         {/* Primary CTA */}
         <a
-          href={googleMapsDirectionsUrl(event.coordinates)}
+          href={googleMapsDirectionsUrl(activity.coordinates)}
           target="_blank"
           rel="noopener noreferrer"
           className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-now-soft to-now py-4 text-base font-extrabold text-ink-900 shadow-[0_8px_24px_rgba(245,158,11,0.35)] transition-transform active:scale-[0.98]"
@@ -138,15 +152,15 @@ function Sheet({
           Go
         </a>
 
-        {/* Secondary link — only when the event carries a source. */}
-        {event.sourceUrl && (
+        {/* Secondary: source link only when present */}
+        {activity.sourceUrl && (
           <a
-            href={event.sourceUrl}
+            href={activity.sourceUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="mt-1 mb-1 block w-full py-3 text-center text-sm font-semibold text-stone-400 transition-colors active:text-stone-200"
           >
-            View source
+            View source · {activity.sourceName}
           </a>
         )}
       </motion.div>
