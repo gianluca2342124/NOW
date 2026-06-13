@@ -47,6 +47,15 @@
   }
 }
 
+/* Respect reduced-motion for CSS-driven pulses (header dot, status pills).
+   Framer-driven bubble motion is handled in-component via useReducedMotion. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-ping-slow,
+  .animate-breathe {
+    animation: none !important;
+  }
+}
+
 /* --- Mapbox GL: dark, warm, premium --- */
 .mapboxgl-map {
   font-family: theme('fontFamily.sans');

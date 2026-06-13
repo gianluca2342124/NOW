@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { MapView } from '@/components/map/MapView';
 import { EventSheet } from '@/components/sheet/EventSheet';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { EVENTS } from '@/data/events';
 import { useNow } from '@/hooks/useNow';
 import { useNowStore } from '@/store/useNowStore';
@@ -12,45 +13,42 @@ export default function App() {
   const selectEvent = useNowStore((s) => s.selectEvent);
   const clearSelection = useNowStore((s) => s.clearSelection);
 
-  // Only show events that haven't ended yet — the map is about *now*.
-  const liveEvents = useMemo(
-    () => EVENTS.filter((e) => deriveStatus(e, now) !== null),
-    [now],
-  );
-
+  // Live "N now" counter. Note: we pass the *stable* EVENTS reference to the
+  // map (markers are created once); status filtering happens inside the map
+  // and the sheet, never by handing the map a fresh array each tick.
   const liveCount = useMemo(
     () =>
-      liveEvents.filter((e) => {
+      EVENTS.filter((e) => {
         const s = deriveStatus(e, now);
         return s === 'live' || s === 'ending';
       }).length,
-    [liveEvents, now],
+    [now],
   );
 
-  const selectedEvent =
-    liveEvents.find((e) => e.id === selectedEventId) ?? null;
+  // Only surface a selected event while it's still ongoing.
+  const selectedEvent = useMemo(() => {
+    const event = EVENTS.find((e) => e.id === selectedEventId) ?? null;
+    if (event && deriveStatus(event, now) === null) return null;
+    return event;
+  }, [selectedEventId, now]);
 
   return (
     <main className="relative h-[100dvh] w-full overflow-hidden bg-ink-900">
-      <MapView
-        events={liveEvents}
-        now={now}
-        selectedEventId={selectedEventId}
-        onSelect={selectEvent}
-      />
+      <ErrorBoundary>
+        <MapView
+          events={EVENTS}
+          now={now}
+          selectedEventId={selectedEventId}
+          onSelect={selectEvent}
+        />
+      </ErrorBoundary>
 
       {/* Brand / pulse header */}
       <header className="safe-top pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5">
         <div className="flex items-center gap-2">
-          <span className="text-xl font-extrabold tracking-tight">
-            NOW
-          </span>
-          <span className="text-xl font-extrabold tracking-tight text-now">
-            ·
-          </span>
-          <span className="text-sm font-semibold text-stone-400">
-            Barcelona
-          </span>
+          <span className="text-xl font-extrabold tracking-tight">NOW</span>
+          <span className="text-xl font-extrabold tracking-tight text-now">·</span>
+          <span className="text-sm font-semibold text-stone-400">Barcelona</span>
         </div>
         <div className="glass flex items-center gap-2 rounded-full px-3 py-1.5">
           <span className="relative flex h-2 w-2">

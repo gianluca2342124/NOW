@@ -7,12 +7,18 @@ import type { NowEvent } from '@/types/event';
 import { BARCELONA_CENTER } from '@/lib/geo';
 import { deriveStatus } from '@/lib/time';
 import { EventBubble } from './EventBubble';
+import { MapErrorState, type MapErrorVariant } from './MapErrorState';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 const MAPBOX_STYLE =
   import.meta.env.VITE_MAPBOX_STYLE || 'mapbox://styles/mapbox/dark-v11';
 
 interface MapViewProps {
+  /**
+   * Stable list of all events. IMPORTANT: this reference must NOT change every
+   * clock tick — markers are created from it once. Live status is derived
+   * per-render from `now` and applied to the (already-mounted) bubbles.
+   */
   events: NowEvent[];
   now: number;
   selectedEventId: string | null;
@@ -21,13 +27,20 @@ interface MapViewProps {
 
 /**
  * Mapbox GL map centered on Barcelona. Each event is a native Mapbox Marker
- * whose DOM container hosts a React-rendered <EventBubble> (via portal). This
- * keeps Mapbox handling geo-positioning while React/Framer owns the animation.
+ * whose DOM container hosts a React-rendered <EventBubble> (via portal).
+ *
+ * Marker lifecycle is decoupled from the live clock: markers are created once
+ * (keyed by stable event identity) and stay mounted. The ticking `now` only
+ * updates each bubble's derived status — it never tears down a marker. This is
+ * what keeps the map smooth instead of re-mounting every bubble on each tick.
  */
 export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [ready, setReady] = useState(false);
+  const [errorVariant, setErrorVariant] = useState<MapErrorVariant | null>(
+    MAPBOX_TOKEN ? null : 'missing',
+  );
   // DOM nodes per event id (Marker elements + portal targets), held in state
   // so portals mount once the markers exist on the map.
   const [markerNodes, setMarkerNodes] = useState<Map<string, HTMLDivElement>>(
@@ -50,6 +63,17 @@ export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps
       antialias: true,
     });
     mapRef.current = map;
+
+    // Graceful handling for invalid / expired tokens and other fatal errors.
+    map.on('error', (e) => {
+      const status = (e.error as { status?: number } | undefined)?.status;
+      if (status === 401 || status === 403) {
+        setErrorVariant('auth');
+      } else if (status !== undefined && status >= 400) {
+        setErrorVariant('unknown');
+      }
+      // Non-fatal errors (e.g. a single failed tile) are ignored on purpose.
+    });
 
     map.on('load', () => {
       // Warm NOW tuning on top of the stock dark style.
@@ -76,7 +100,7 @@ export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps
     };
   }, []);
 
-  // --- Create one Marker per event (geo-position only) ---
+  // --- Create one Marker per event, ONCE (stable identity, not the clock) ---
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
@@ -97,8 +121,11 @@ export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps
       markers.forEach((m) => m.remove());
       setMarkerNodes(new Map());
     };
+    // `now` is intentionally NOT a dependency: markers must survive every tick.
   }, [events, ready]);
 
+  // Live status per event, recomputed each tick. Cheap; updates bubble props
+  // in place without remounting markers.
   const statuses = useMemo(() => {
     const map = new Map<string, ReturnType<typeof deriveStatus>>();
     for (const e of events) map.set(e.id, deriveStatus(e, now));
@@ -118,46 +145,30 @@ export function MapView({ events, now, selectedEventId, onSelect }: MapViewProps
         }}
       />
 
-      {!MAPBOX_TOKEN && <MissingTokenOverlay />}
+      {errorVariant && <MapErrorState variant={errorVariant} />}
 
-      {/* React bubbles portaled into their Mapbox marker containers. */}
+      {/*
+        Bubbles are portaled into stable marker nodes. A bubble whose event has
+        ended (status null) renders nothing, but its marker stays mounted — no
+        teardown churn. Live status updates flow in as props.
+      */}
       {events.map((event) => {
         const node = markerNodes.get(event.id);
         const status = statuses.get(event.id);
-        if (!node || !status) return null;
+        if (!node) return null;
         return createPortal(
-          <EventBubble
-            key={event.id}
-            event={event}
-            status={status}
-            selected={selectedEventId === event.id}
-            onSelect={onSelect}
-          />,
+          status ? (
+            <EventBubble
+              event={event}
+              status={status}
+              selected={selectedEventId === event.id}
+              onSelect={onSelect}
+            />
+          ) : null,
           node,
+          event.id,
         );
       })}
-    </div>
-  );
-}
-
-function MissingTokenOverlay() {
-  return (
-    <div className="absolute inset-0 z-30 grid place-items-center bg-ink-900 px-8 text-center">
-      <div className="max-w-sm">
-        <div className="mx-auto mb-5 h-14 w-14 rounded-2xl bg-gradient-to-b from-now-soft to-now-deep" />
-        <h1 className="text-2xl font-extrabold tracking-tight">NOW</h1>
-        <p className="mt-3 text-sm leading-relaxed text-stone-400">
-          Add a Mapbox public token to see the city come alive. Create a{' '}
-          <code className="rounded bg-ink-700 px-1.5 py-0.5 text-now-soft">
-            .env
-          </code>{' '}
-          file with{' '}
-          <code className="rounded bg-ink-700 px-1.5 py-0.5 text-now-soft">
-            VITE_MAPBOX_TOKEN
-          </code>
-          , then restart the dev server.
-        </p>
-      </div>
     </div>
   );
 }

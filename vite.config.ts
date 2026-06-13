@@ -9,7 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['now.svg'],
+      includeAssets: ['now.svg', 'icons/apple-touch-icon.png'],
       manifest: {
         name: 'NOW — Barcelona',
         short_name: 'NOW',
@@ -21,15 +21,21 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
-            src: 'now.svg',
-            sizes: 'any',
-            type: 'image/svg+xml',
+            src: 'icons/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
             purpose: 'any',
           },
           {
-            src: 'now.svg',
-            sizes: 'any',
-            type: 'image/svg+xml',
+            src: 'icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: 'icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
             purpose: 'maskable',
           },
         ],
