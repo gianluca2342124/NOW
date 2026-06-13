@@ -1,0 +1,105 @@
+# NOW — Barcelona
+
+A map-first, real-time activity map for Barcelona. Open it and feel the city
+come alive: animated bubbles for what's happening **now**, starting soon, or
+on tonight.
+
+This repository is the **Phase 0 + Phase 1 visual prototype**. It validates the
+core NOW feeling — premium, alive, smooth, mobile-first. There is intentionally
+**no backend, database, auth, accounts, AI, payments, or ingestion** yet. All
+event data is hardcoded.
+
+## Tech stack
+
+- React + Vite + TypeScript
+- Mapbox GL JS
+- Tailwind CSS
+- Framer Motion
+- Zustand
+- PWA (vite-plugin-pwa)
+- pnpm
+
+## Quick start
+
+```bash
+# 1. Install dependencies
+pnpm install
+
+# 2. Configure your Mapbox token
+cp .env.example .env
+# then edit .env and paste your Mapbox public token
+
+# 3. Run the dev server
+pnpm dev
+```
+
+Open the printed local URL on your phone (same Wi-Fi) or in a mobile-emulated
+browser viewport for the intended experience.
+
+## Environment variables
+
+| Variable             | Required | Description                                                                                  |
+| -------------------- | -------- | -------------------------------------------------------------------------------------------- |
+| `VITE_MAPBOX_TOKEN`  | **Yes**  | Your Mapbox GL public access token. Get one at https://account.mapbox.com/access-tokens/     |
+| `VITE_MAPBOX_STYLE`  | No       | Custom Mapbox Studio style URL. Falls back to `mapbox://styles/mapbox/dark-v11` when not set. |
+
+Without a token the app renders a friendly "add your token" overlay instead of
+the map.
+
+## How to test the prototype
+
+1. Run `pnpm dev` with a valid `VITE_MAPBOX_TOKEN`.
+2. The map loads centered on Barcelona with animated event bubbles.
+3. **Bubble states** — bubbles breathe/pulse at different intensities:
+   - `live` (brightest, fastest pulse) · `ending` · `imminent` · `upcoming`
+   - Status is derived from each event's time relative to the live clock, so
+     bubbles transition on their own (the clock ticks every 15s).
+4. **Categories** — color + glyph per bubble: nightlife, music, sports,
+   culture, food, civic.
+5. **Tap a bubble** → a glassmorphism bottom sheet slides up with title, venue,
+   category, status, time, description and a distance placeholder.
+6. **Go button** → opens Google Maps walking directions to the event.
+7. Dismiss the sheet by dragging it down or tapping the backdrop.
+8. The header shows a live "N live now" pulse counter.
+
+## Available scripts
+
+```bash
+pnpm dev        # start the dev server
+pnpm build      # type-check + production build
+pnpm preview    # preview the production build
+pnpm typecheck  # type-check only
+```
+
+## Project structure
+
+```
+src/
+├── App.tsx                  # composition: map + header + sheet
+├── main.tsx
+├── index.css                # Tailwind layers, glass + Mapbox styling
+├── types/event.ts           # NowEvent, EventCategory, EventStatus
+├── data/events.ts           # hardcoded Barcelona events (relative times)
+├── lib/
+│   ├── time.ts              # status derivation + time labels
+│   ├── geo.ts               # distance + Google Maps deep link
+│   └── categories.ts        # category & status visual config
+├── store/useNowStore.ts     # Zustand: selected event
+├── hooks/useNow.ts          # ticking live clock
+└── components/
+    ├── map/MapView.tsx      # Mapbox GL init + markers
+    ├── map/EventBubble.tsx  # animated bubble (Framer Motion)
+    ├── sheet/EventSheet.tsx # glassmorphism bottom sheet
+    └── ui/StatusPill.tsx    # status badge
+```
+
+## Notes & known limitations
+
+- **Distance is a placeholder** — measured from Barcelona centre, since there's
+  no geolocation permission flow yet.
+- **Map style** is stock `dark-v11` with a warm overlay/fog tuning. A custom
+  premium Mapbox Studio style can be dropped in later via `VITE_MAPBOX_STYLE`.
+- Event data is hardcoded with times relative to app load, so every bubble
+  state is visible whenever you open the prototype.
+- PWA icons use a single SVG; dedicated PNG icons can be added before store
+  submission.

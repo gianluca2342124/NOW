@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background-color: theme('colors.ink.900');
+    color: #f5f5f4;
+    font-family: theme('fontFamily.sans');
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* Prevent overscroll bounce revealing the page behind the map. */
+    overscroll-behavior: none;
+  }
+}
+
+@layer components {
+  /* Frosted-glass surface used by the bottom sheet and overlays. */
+  .glass {
+    background: linear-gradient(
+      180deg,
+      rgba(28, 25, 23, 0.78) 0%,
+      rgba(12, 10, 9, 0.92) 100%
+    );
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid rgba(245, 158, 11, 0.12);
+  }
+
+  .safe-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom), 1rem);
+  }
+
+  .safe-top {
+    padding-top: max(env(safe-area-inset-top), 0.75rem);
+  }
+}
+
+/* --- Mapbox GL: dark, warm, premium --- */
+.mapboxgl-map {
+  font-family: theme('fontFamily.sans');
+}
+
+/* Hide default Mapbox chrome we don't want in the prototype. */
+.mapboxgl-ctrl-logo,
+.mapboxgl-ctrl-attrib {
+  opacity: 0.35;
+}
+
+.mapboxgl-ctrl-bottom-right,
+.mapboxgl-ctrl-bottom-left {
+  /* Keep attribution clear of the bottom sheet / safe area. */
+  margin-bottom: env(safe-area-inset-bottom);
+}
+
+/* Marker reset so our React bubble controls its own footprint. */
+.now-marker {
+  cursor: pointer;
+  will-change: transform;
+}
