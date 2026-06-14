@@ -1,6 +1,6 @@
 import type { RawActivity, ServerSource } from '../types';
-import { mapTextToCategory } from '../categories';
 import { fetchJson, parseLooseDate, pick, toNumber } from '../http';
+import { classify, rankScore, timeRelevance } from '../quality';
 
 /**
  * Barcelona Open Data — "Agenda d'actes i activitats de la ciutat de Barcelona"
@@ -23,9 +23,11 @@ const CKAN_BASE =
   'https://opendata-ajuntament.barcelona.cat/data/api/3/action';
 const DEFAULT_DATASET = 'agenda-diaria';
 const DEFAULT_RESOURCE_ID = '877ccf66-9106-4ae2-be51-95a9f6469e4c';
-const RECORD_LIMIT = 500;
+const RECORD_LIMIT = 800;
 const WINDOW_DAYS = 45;
 const DAY = 24 * 60 * 60 * 1000;
+/** Cap the feed: quality over quantity. */
+const MAX_OUTPUT = 120;
 
 export interface BcnDebug {
   datasetIdsAttempted: string[];
@@ -39,9 +41,13 @@ export interface BcnDebug {
   queryMethod: 'sql' | 'datastore_search' | 'none';
   datastoreOk: boolean;
   rawRecordCount: number;
+  afterRegisterDedupe: number;
   sampleRecordKeys: string[];
-  parsedCount: number;
-  parseDropReasons: Record<string, number>;
+  dropReasons: Record<string, number>;
+  afterParse: number;
+  afterNameDedupe: number;
+  finalCount: number;
+  categoryDistribution: Record<string, number>;
 }
 
 interface PackageShow {
@@ -162,11 +168,6 @@ function parseRecord(
   if (lat === undefined || lng === undefined) return { drop: 'no_coords' };
 
   const endsAt = parseLooseDate(pick(record, ['end_date', 'data_fi']));
-  const categoryText = pick(record, [
-    'secondary_filters_name',
-    'values_category',
-    'secondary_filters_fullpath',
-  ]);
   const id =
     pick(record, ['register_id', '_id', 'id']) ?? `${resourceId}-${index}`;
 
@@ -174,23 +175,28 @@ function parseRecord(
     raw: {
       id,
       title,
-      venueName: pick(record, [
-        'institution_name',
-        'addresses_road_name',
-      ]),
+      venueName: pick(record, ['institution_name', 'addresses_road_name']),
       neighborhood: pick(record, [
         'addresses_neighborhood_name',
         'addresses_district_name',
       ]),
-      category: mapTextToCategory(categoryText ?? title),
+      category: 'other', // provisional — set by classify() in load
       coordinates: { lat, lng },
       startsAt,
       endsAt: endsAt ?? null,
       sourceUrl: pick(record, ['url', 'enllac', 'link']),
       description: pick(record, ['values_description', 'body', 'descripcio']),
-      tags: categoryText ? [categoryText] : [],
+      tags: [],
     },
   };
+}
+
+function slugKey(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '');
 }
 
 function inWindow(raw: RawActivity, now: number): boolean {
@@ -219,39 +225,113 @@ export async function loadBarcelonaOpenData(
     queryMethod: 'none',
     datastoreOk: false,
     rawRecordCount: 0,
+    afterRegisterDedupe: 0,
     sampleRecordKeys: [],
-    parsedCount: 0,
-    parseDropReasons: {},
+    dropReasons: {},
+    afterParse: 0,
+    afterNameDedupe: 0,
+    finalCount: 0,
+    categoryDistribution: {},
   };
 
-  const out: RawActivity[] = [];
+  // 1) Fetch raw records across datasets.
+  const records: Record<string, unknown>[] = [];
   for (const datasetId of datasetIds) {
     const resourceId = await discoverResourceId(datasetId, debug);
     debug.selectedResourceId = resourceId;
     if (!resourceId) continue;
+    const recs = await queryRecords(resourceId, now, debug);
+    if (recs[0] && debug.sampleRecordKeys.length === 0) {
+      debug.sampleRecordKeys = Object.keys(recs[0]);
+    }
+    records.push(...recs);
+  }
+  debug.rawRecordCount = records.length;
 
-    const records = await queryRecords(resourceId, now, debug);
-    debug.rawRecordCount += records.length;
-    if (records[0] && debug.sampleRecordKeys.length === 0) {
-      debug.sampleRecordKeys = Object.keys(records[0]);
+  // 2) Collapse attribute-duplicate rows (same register_id → one event).
+  const byRegister = new Map<string, Record<string, unknown>>();
+  const noRegister: Record<string, unknown>[] = [];
+  for (const rec of records) {
+    const rid = pick(rec, ['register_id']);
+    if (rid) {
+      if (!byRegister.has(rid)) byRegister.set(rid, rec);
+    } else {
+      noRegister.push(rec);
+    }
+  }
+  const uniqueRecords = [...byRegister.values(), ...noRegister];
+  debug.afterRegisterDedupe = uniqueRecords.length;
+
+  // 3) Parse → classify → filter; rank each survivor.
+  interface Ranked {
+    raw: RawActivity;
+    rank: number;
+    startMs: number;
+    nameKey: string;
+  }
+  const ranked: Ranked[] = [];
+  uniqueRecords.forEach((record, i) => {
+    const parsed = parseRecord(record, debug.selectedResourceId ?? 'bcn', i);
+    if ('drop' in parsed) {
+      bump(debug.dropReasons, parsed.drop);
+      return;
+    }
+    const raw = parsed.raw;
+    if (!inWindow(raw, now)) {
+      bump(debug.dropReasons, 'out_of_window');
+      return;
     }
 
-    records.forEach((record, i) => {
-      const parsed = parseRecord(record, resourceId, i);
-      if ('drop' in parsed) {
-        bump(debug.parseDropReasons, parsed.drop);
-        return;
-      }
-      if (!inWindow(parsed.raw, now)) {
-        bump(debug.parseDropReasons, 'out_of_window');
-        return;
-      }
-      out.push(parsed.raw);
-    });
-  }
+    const cls = classify(raw.title);
+    if (cls.drop) {
+      bump(debug.dropReasons, 'low_value');
+      return;
+    }
+    raw.category = cls.category;
+    raw.activityLabel = cls.label;
+    raw.shortMapLabel = cls.shortLabel;
 
-  debug.parsedCount = out.length;
+    const startMs = Date.parse(raw.startsAt);
+    const endMs = raw.endsAt ? Date.parse(raw.endsAt) : null;
+    const tRel = timeRelevance(startMs, endMs, now);
+    raw.importance = clamp01(0.6 * cls.quality + 0.4 * tRel);
+
+    ranked.push({
+      raw,
+      rank: rankScore(cls.quality, tRel),
+      startMs,
+      nameKey: `${slugKey(raw.title)}|${slugKey(raw.venueName ?? '')}`,
+    });
+  });
+  debug.afterParse = ranked.length;
+
+  // 4) Collapse recurring sessions (same name+venue) → keep the soonest, then
+  //    the highest-ranked.
+  const byName = new Map<string, Ranked>();
+  for (const item of ranked) {
+    const existing = byName.get(item.nameKey);
+    if (
+      !existing ||
+      item.startMs < existing.startMs ||
+      (item.startMs === existing.startMs && item.rank > existing.rank)
+    ) {
+      byName.set(item.nameKey, item);
+    }
+  }
+  const deduped = [...byName.values()];
+  debug.afterNameDedupe = deduped.length;
+
+  // 5) Rank, cap, and record category distribution.
+  deduped.sort((a, b) => b.rank - a.rank);
+  const out = deduped.slice(0, MAX_OUTPUT).map((r) => r.raw);
+  for (const a of out) bump(debug.categoryDistribution, a.category);
+  debug.finalCount = out.length;
+
   return { activities: out, debug };
+}
+
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
 }
 
 export const barcelonaOpenData: ServerSource = {

@@ -86,6 +86,9 @@ export interface RawActivity {
   priceLabel?: string;
   importance?: number;
   tags?: string[];
+  /** Optional source-provided presentation (overrides category defaults). */
+  activityLabel?: string;
+  shortMapLabel?: string;
 }
 
 export interface SourceContext {

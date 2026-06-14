@@ -37,8 +37,8 @@ export function normalize(
   return {
     id: `${source.id}:${raw.id}`,
     title: raw.title.trim(),
-    activityLabel: ACTIVITY_LABEL_BY_CATEGORY[category],
-    shortMapLabel: SHORT_LABEL_BY_CATEGORY[category],
+    activityLabel: raw.activityLabel ?? ACTIVITY_LABEL_BY_CATEGORY[category],
+    shortMapLabel: raw.shortMapLabel ?? SHORT_LABEL_BY_CATEGORY[category],
     venueName: raw.venueName?.trim() || raw.title.trim(),
     neighborhood: raw.neighborhood?.trim() || 'Barcelona',
     category,
