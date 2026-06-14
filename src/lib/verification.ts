@@ -54,12 +54,16 @@ export function effectiveVerification(activity: Activity): VerificationStatus {
   return activity.verificationStatus;
 }
 
-/** Whether the dataset as a whole is live-verified (drives the global chip). */
+/** Whether the feed is purely curated (no real source contributed). */
 export function isCuratedPreview(activities: Activity[]): boolean {
-  return !activities.some(
-    (a) =>
-      a.verifiedLive &&
-      (a.verificationStatus === 'official_source' ||
-        a.verificationStatus === 'verified'),
-  );
+  return !activities.some((a) => a.sourceType !== 'curated');
+}
+
+/** Distinct names of the real (non-curated) sources currently in the feed. */
+export function realSourceNames(activities: Activity[]): string[] {
+  const names = new Set<string>();
+  for (const a of activities) {
+    if (a.sourceType !== 'curated') names.add(a.sourceName);
+  }
+  return [...names];
 }

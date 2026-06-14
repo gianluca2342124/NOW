@@ -13,7 +13,7 @@ import { isEnded } from '@/lib/status';
 
 export default function App() {
   const now = useNow();
-  const activities = useActivities();
+  const { activities } = useActivities();
   const { request } = useGeolocation();
 
   const selectedActivityId = useNowStore((s) => s.selectedActivityId);

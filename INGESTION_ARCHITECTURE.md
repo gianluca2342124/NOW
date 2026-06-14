@@ -144,8 +144,33 @@ and it is intentionally **not** built yet — it is the proposed next phase.
 | `Activity` model + trust fields | ✅ implemented |
 | `deriveTimeState` / `deriveDisplayStatus` (anti-fake-live) | ✅ implemented |
 | Confidence scoring | ✅ implemented |
-| `SourceAdapter` contract + registry | ✅ implemented |
+| `SourceAdapter` / `ServerSource` contract + registry | ✅ implemented |
 | Curated adapter (local, honest) | ✅ implemented & live |
-| Normalize + dedupe pipeline | ✅ implemented |
-| Networked adapters (Eventbrite/Bandsintown/Open Data) | 🔜 scaffolded, require serverless layer (§6) |
-| Serverless `/api/activities` | 🔜 next phase |
+| Normalize + dedupe pipeline (client + server) | ✅ implemented |
+| **Serverless `/api/activities` (Edge function)** | ✅ implemented |
+| **Barcelona Open Data adapter** (no key, discovery-based) | ✅ implemented & live |
+| **Ticketmaster Discovery adapter** (key-gated) | ✅ implemented, enable with `TICKETMASTER_API_KEY` |
+| **Songkick adapter** (key-gated, metro 28714) | ✅ implemented, enable with `SONGKICK_API_KEY` |
+| Bandsintown adapter | 🟡 prepared scaffold (no city endpoint yet) |
+| Client hydrate (`useActivities` → `/api/activities`) | ✅ implemented |
+| Eventbrite | ⛔ intentionally not built (public search API discontinued) |
+
+### Server source layout (`/api`)
+
+```
+api/
+├── activities.ts              # Edge function: run sources → normalize → dedupe → JSON
+└── _lib/
+    ├── types.ts               # server Activity + ServerSource contract
+    ├── http.ts                # fetchJson + tolerant field/date parsers
+    ├── categories.ts          # category mapping + presentation defaults
+    ├── normalize.ts           # raw → Activity (trust assignment, validation)
+    ├── dedupe.ts              # cross-source merge by trust
+    ├── curatedFallback.ts     # last-resort honest set (only when 0 real)
+    └── sources/
+        ├── barcelonaOpenData.ts  # official, no key — the real core
+        ├── ticketmaster.ts       # key-gated Discovery search
+        ├── songkick.ts           # key-gated concerts
+        ├── bandsintown.ts        # prepared scaffold (disabled)
+        └── registry.ts           # SERVER_SOURCES priority list
+```

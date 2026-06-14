@@ -4,5 +4,5 @@
   "buildCommand": "pnpm build",
   "outputDirectory": "dist",
   "installCommand": "pnpm install",
-  "rewrites": [{ "source": "/((?!assets/|icons/|.*\\.).*)", "destination": "/" }]
+  "rewrites": [{ "source": "/((?!api/|assets/|icons/|.*\\.).*)", "destination": "/" }]
 }

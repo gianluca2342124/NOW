@@ -1,17 +1,48 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Activity } from '@/types/activity';
 import { loadCuratedActivitiesSync } from '@/ingestion';
+import { fetchRemoteActivities } from '@/ingestion/remote';
+
+export interface ActivitiesState {
+  activities: Activity[];
+  /** True once real source data (not curated) has hydrated in. */
+  live: boolean;
+}
 
 /**
- * Provides the activity feed to the app. Initialised synchronously from the
- * curated adapter so the first paint is instant AND the array reference is
- * stable for the lifetime of the session (no Mapbox marker churn).
+ * Activity feed for the app.
  *
- * When the networked ingestion layer lands, this hook gains a background
- * refresh against `loadActivities()` / `/api/activities` without changing its
- * contract.
+ * 1. First paint: curated data, loaded synchronously → instant AND a stable
+ *    array reference (no Mapbox marker churn).
+ * 2. Hydrate: fetch /api/activities once. If it returns real source data, swap
+ *    the array a single time (markers re-create once, never per tick). On any
+ *    failure, the curated data simply stays.
  */
-export function useActivities(): Activity[] {
-  const [activities] = useState<Activity[]>(() => loadCuratedActivitiesSync());
-  return activities;
+export function useActivities(): ActivitiesState {
+  const [state, setState] = useState<ActivitiesState>(() => ({
+    activities: loadCuratedActivitiesSync(),
+    live: false,
+  }));
+
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+
+    fetchRemoteActivities(controller.signal)
+      .then((result) => {
+        if (active && result.live && result.activities.length > 0) {
+          setState({ activities: result.activities, live: true });
+        }
+      })
+      .catch(() => {
+        /* keep curated data */
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, []);
+
+  return state;
 }

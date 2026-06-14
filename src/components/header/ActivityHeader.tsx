@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { Activity } from '@/types/activity';
 import { deriveTimeState } from '@/lib/status';
 import { distanceKm } from '@/lib/geo';
-import { isCuratedPreview } from '@/lib/verification';
+import { isCuratedPreview, realSourceNames } from '@/lib/verification';
 import { useNowStore } from '@/store/useNowStore';
 
 interface ActivityHeaderProps {
@@ -21,7 +21,7 @@ const NEARBY_KM = 2;
 export function ActivityHeader({ activities, now }: ActivityHeaderProps) {
   const userLocation = useNowStore((s) => s.userLocation);
 
-  const { onNow, tonight, nearby, curated } = useMemo(() => {
+  const { onNow, tonight, nearby, curated, sources } = useMemo(() => {
     let onNowCount = 0;
     let tonightCount = 0;
     let nearbyCount = 0;
@@ -42,6 +42,7 @@ export function ActivityHeader({ activities, now }: ActivityHeaderProps) {
       tonight: tonightCount,
       nearby: nearbyCount,
       curated: isCuratedPreview(activities),
+      sources: realSourceNames(activities),
     };
   }, [activities, now, userLocation]);
 
@@ -54,9 +55,13 @@ export function ActivityHeader({ activities, now }: ActivityHeaderProps) {
           <span className="text-sm font-semibold text-stone-300">Barcelona</span>
         </div>
 
-        {curated && (
+        {curated ? (
           <span className="rounded-full bg-ink-900/70 px-2.5 py-1 text-[11px] font-semibold text-now-soft ring-1 ring-now/30 backdrop-blur-xl">
             Curated preview
+          </span>
+        ) : (
+          <span className="rounded-full bg-ink-900/70 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-400/30 backdrop-blur-xl">
+            Live · {sources.length === 1 ? sources[0] : `${sources.length} sources`}
           </span>
         )}
       </div>

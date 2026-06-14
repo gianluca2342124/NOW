@@ -139,10 +139,34 @@ src/
 - **Source attribution.** The sheet shows a verification badge, source name,
   "Checked …" freshness, and a "View source" link when available. A global
   "Curated preview" chip discloses the dataset isn't live-verified.
-- **Ingestion architecture.** `src/ingestion/` implements a source-pluggable
-  pipeline (adapter → normalize → confidence → dedupe). The curated adapter is
-  live; networked adapters are scaffolded and need the serverless layer
-  described in `INGESTION_ARCHITECTURE.md`.
+- **Ingestion architecture.** `src/ingestion/` (client) + `api/` (server)
+  implement a source-pluggable pipeline (adapter → normalize → confidence →
+  dedupe). See `INGESTION_ARCHITECTURE.md`.
+
+## Live data (`/api/activities`)
+
+NOW now fetches real Barcelona activities from a Vercel **Edge function** at
+`/api/activities`, which runs every enabled source server-side, normalizes them
+into `Activity`, dedupes across sources, and falls back to a small curated set
+**only when no real source yields data**.
+
+- **Barcelona Open Data** (Ajuntament CKAN) — the real core, **no API key**.
+  Resilient to resource-id rotation (dataset discovery), overridable via
+  `BCN_OPENDATA_DATASET_IDS` / `BCN_OPENDATA_RESOURCE_ID`.
+- **Ticketmaster Discovery** — real city-wide search; enable with
+  `TICKETMASTER_API_KEY` (server-only, never exposed to the client).
+- **Songkick** — concerts; enable with `SONGKICK_API_KEY` (Barcelona metro
+  `28714`, overridable via `SONGKICK_METRO_ID`).
+- **Bandsintown** — prepared adapter, disabled until a city endpoint is
+  available.
+- **Eventbrite** — intentionally not integrated (its public city-wide search
+  API was discontinued).
+
+The client (`useActivities`) paints curated data instantly for a stable first
+frame, then hydrates from `/api/activities` once — swapping the feed a single
+time (no marker churn). If the endpoint or every source fails, the curated data
+simply stays. All real sources set `verifiedLive: false`, so live data is shown
+honestly as scheduled — **still zero false "Live now" claims**.
 
 ## Notes & known limitations
 
