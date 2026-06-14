@@ -57,6 +57,13 @@ export interface TmDebug {
   httpOk: boolean;
   rawEventCount: number;
   parsedCount: number;
+  beforeDedupCount: number;
+  afterDedupCount: number;
+  duplicateGroups: number;
+  topRepeatedTitles: { title: string; sessions: number }[];
+  segmentDistribution: Record<string, number>;
+  postQualityCount: number;
+  finalTicketmasterCount: number;
   dropReasons: Record<string, number>;
   categoryDistribution: Record<string, number>;
   sample: TmSample[];
@@ -194,6 +201,72 @@ function fmtZ(ts: number): string {
   return new Date(ts).toISOString().slice(0, 19) + 'Z';
 }
 
+function slug(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+/** Tourist "experiences"/attractions are not events — drop them. */
+const JUNK_RE =
+  /(experience|immersive|escape room|\battraction\b|\bexpo\b|hologram|360|interactiu|interactivo)/;
+
+function isTouristJunk(name: string, allText: string): boolean {
+  const s = `${name} ${allText}`.toLowerCase();
+  return JUNK_RE.test(s);
+}
+
+/** Editorial quality per category for Ticketmaster's high-signal listings. */
+function tmQuality(category: EventCategory, allText: string): number {
+  if (/family|infantil|kids|children/.test(allText)) return 0.35; // penalise family
+  switch (category) {
+    case 'music':
+      return 0.9;
+    case 'sports':
+      return 0.85;
+    case 'nightlife':
+      return 0.82;
+    case 'culture':
+      return 0.74;
+    case 'food':
+      return 0.62;
+    case 'market':
+      return 0.6;
+    default:
+      return 0.4;
+  }
+}
+
+/** Stronger segments first; avoids the Miscellaneous/Family flood at the query. */
+const SEGMENTS = ['Music', 'Sports', 'Arts & Theatre'];
+const PER_SEGMENT_SIZE = 120;
+/** Source-level cap so Ticketmaster enriches rather than floods the feed. */
+const TM_MAX = 40;
+
+async function fetchSegment(
+  key: string,
+  segment: string,
+  now: number,
+): Promise<TmEvent[]> {
+  const url =
+    `${ENDPOINT}?apikey=${encodeURIComponent(key)}` +
+    `&city=Barcelona&countryCode=ES&size=${PER_SEGMENT_SIZE}&sort=date,asc&locale=*` +
+    `&segmentName=${encodeURIComponent(segment)}` +
+    `&startDateTime=${fmtZ(now)}&endDateTime=${fmtZ(now + WINDOW_DAYS * DAY)}`;
+  const data = await fetchJson<TmResponse>(url, {}, 9000);
+  return data?._embedded?.events ?? [];
+}
+
+interface TmParsed {
+  ev: TmEvent;
+  raw: RawActivity;
+  key: string;
+  startMs: number;
+  sessions: number;
+}
+
 export async function loadTicketmaster(
   now: number,
 ): Promise<{ activities: RawActivity[]; debug: TmDebug }> {
@@ -202,6 +275,13 @@ export async function loadTicketmaster(
     httpOk: false,
     rawEventCount: 0,
     parsedCount: 0,
+    beforeDedupCount: 0,
+    afterDedupCount: 0,
+    duplicateGroups: 0,
+    topRepeatedTitles: [],
+    segmentDistribution: {},
+    postQualityCount: 0,
+    finalTicketmasterCount: 0,
     dropReasons: {},
     categoryDistribution: {},
     sample: [],
@@ -210,19 +290,22 @@ export async function loadTicketmaster(
   const key = process.env.TICKETMASTER_API_KEY;
   if (!key) return { activities: [], debug };
 
-  const url =
-    `${ENDPOINT}?apikey=${encodeURIComponent(key)}` +
-    `&city=Barcelona&countryCode=ES&size=199&sort=date,asc&locale=*` +
-    `&startDateTime=${fmtZ(now)}&endDateTime=${fmtZ(now + WINDOW_DAYS * DAY)}`;
-
-  const data = await fetchJson<TmResponse>(url, {}, 9000);
-  if (!data) return { activities: [], debug };
-  debug.httpOk = true;
-
-  const events = data._embedded?.events ?? [];
+  // 1) Targeted queries per strong segment.
+  const results = await Promise.allSettled(
+    SEGMENTS.map((seg) => fetchSegment(key, seg, now)),
+  );
+  const events: TmEvent[] = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      debug.httpOk = true;
+      events.push(...r.value);
+    }
+  }
   debug.rawEventCount = events.length;
+  for (const ev of events) {
+    bump(debug.segmentDistribution, ev.classifications?.[0]?.segment?.name ?? 'Undefined');
+  }
 
-  // Diagnostic sample: first 5 events' raw classification + venue + dates.
   debug.sample = events.slice(0, 5).map((ev) => {
     const c = ev.classifications?.[0];
     return {
@@ -238,7 +321,8 @@ export async function loadTicketmaster(
     };
   });
 
-  const out: RawActivity[] = [];
+  // 2) Parse.
+  const parsed: TmParsed[] = [];
   for (const ev of events) {
     if (!ev.name) {
       bump(debug.dropReasons, 'no_title');
@@ -260,27 +344,84 @@ export async function loadTicketmaster(
       bump(debug.dropReasons, 'no_coords');
       continue;
     }
-
-    const category = tmCategory(ev);
-    bump(debug.categoryDistribution, category);
-    out.push({
-      id: ev.id,
-      title: ev.name,
-      venueName: venue?.name,
-      neighborhood: venue?.city?.name ?? 'Barcelona',
-      category,
-      activityLabel: LABELS[category].label,
-      shortMapLabel: LABELS[category].short,
-      coordinates: { lat, lng },
-      startsAt: startIso,
-      endsAt: ev.dates?.end?.dateTime ?? null,
-      sourceUrl: ev.url,
-      description: ev.info,
-      priceLabel: priceLabel(ev),
-      importance: 0.78,
+    parsed.push({
+      ev,
+      raw: {
+        id: ev.id,
+        title: ev.name,
+        venueName: venue?.name,
+        neighborhood: venue?.city?.name ?? 'Barcelona',
+        category: 'other',
+        coordinates: { lat, lng },
+        startsAt: startIso,
+        endsAt: ev.dates?.end?.dateTime ?? null,
+        sourceUrl: ev.url,
+        description: ev.info,
+        priceLabel: priceLabel(ev),
+        tags: [],
+      },
+      key: `${slug(ev.name)}|${slug(venue?.name ?? '')}`,
+      startMs: Date.parse(startIso),
+      sessions: 1,
     });
   }
-  debug.parsedCount = out.length;
+  debug.parsedCount = parsed.length;
+  debug.beforeDedupCount = parsed.length;
+
+  // 3) Collapse repeated sessions (same name+venue) → keep earliest upcoming.
+  const byKey = new Map<string, TmParsed>();
+  for (const p of parsed) {
+    const existing = byKey.get(p.key);
+    if (!existing) {
+      byKey.set(p.key, { ...p });
+    } else {
+      existing.sessions += 1;
+      if (p.startMs < existing.startMs) {
+        existing.startMs = p.startMs;
+        existing.raw.startsAt = p.raw.startsAt;
+      }
+    }
+  }
+  const deduped = [...byKey.values()];
+  debug.afterDedupCount = deduped.length;
+  const repeated = deduped
+    .filter((p) => p.sessions > 1)
+    .sort((a, b) => b.sessions - a.sessions);
+  debug.duplicateGroups = repeated.length;
+  debug.topRepeatedTitles = repeated
+    .slice(0, 5)
+    .map((p) => ({ title: p.raw.title, sessions: p.sessions }));
+
+  // 4) Quality: classify, drop tourist-experience junk, score.
+  interface Scored {
+    raw: RawActivity;
+    quality: number;
+    startMs: number;
+  }
+  const scored: Scored[] = [];
+  for (const p of deduped) {
+    const allText = classificationText(p.ev);
+    if (isTouristJunk(p.raw.title, allText)) {
+      bump(debug.dropReasons, 'tourist_experience');
+      continue;
+    }
+    const category = tmCategory(p.ev);
+    const quality = tmQuality(category, allText);
+    p.raw.category = category;
+    p.raw.activityLabel = LABELS[category].label;
+    p.raw.shortMapLabel = LABELS[category].short;
+    p.raw.importance = quality;
+    if (p.sessions > 1) p.raw.tags = ['multiple sessions'];
+    scored.push({ raw: p.raw, quality, startMs: p.startMs });
+  }
+  debug.postQualityCount = scored.length;
+
+  // 5) Rank by quality (then soonest) and cap Ticketmaster's contribution.
+  scored.sort((a, b) => b.quality - a.quality || a.startMs - b.startMs);
+  const out = scored.slice(0, TM_MAX).map((s) => s.raw);
+  for (const a of out) bump(debug.categoryDistribution, a.category);
+  debug.finalTicketmasterCount = out.length;
+
   return { activities: out, debug };
 }
 
