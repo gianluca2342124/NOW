@@ -4,6 +4,7 @@ import { normalize, dropReason } from './_lib/normalize';
 import { dedupeActivities } from './_lib/dedupe';
 import { curatedFallback } from './_lib/curatedFallback';
 import { loadBarcelonaOpenData } from './_lib/sources/barcelonaOpenData';
+import { loadTicketmaster } from './_lib/sources/ticketmaster';
 
 export const config = { runtime: 'edge' };
 
@@ -14,9 +15,12 @@ function json(body: unknown, cacheControl: string): Response {
   });
 }
 
-/** Temporary diagnostics for /api/activities?debug=1 — Barcelona Open Data. */
+/** Temporary diagnostics for /api/activities?debug=1. */
 async function buildDebug(now: number) {
-  const { activities: raws, debug } = await loadBarcelonaOpenData(now);
+  const [{ activities: raws, debug }, tm] = await Promise.all([
+    loadBarcelonaOpenData(now),
+    loadTicketmaster(now),
+  ]);
   const normalizeDropReasons: Record<string, number> = {};
   let normalizedCount = 0;
   for (const raw of raws) {
@@ -26,6 +30,7 @@ async function buildDebug(now: number) {
   }
   return {
     generatedAt: new Date(now).toISOString(),
+    ticketmaster: tm.debug,
     barcelonaOpenData: {
       datasetIdsAttempted: debug.datasetIdsAttempted,
       packageShow: debug.packageShow,
