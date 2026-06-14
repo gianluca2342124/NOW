@@ -13,6 +13,10 @@ export default defineConfig({
       workbox: {
         // mapbox-gl is a large but cacheable vendor chunk.
         maximumFileSizeToCacheInBytes: 3_000_000,
+        // Never serve the SPA shell for API routes — the service worker's
+        // navigation fallback must not intercept /api/* (it would return
+        // index.html in the browser instead of the JSON from the function).
+        navigateFallbackDenylist: [/^\/api\//],
       },
       manifest: {
         name: 'NOW — Barcelona',
