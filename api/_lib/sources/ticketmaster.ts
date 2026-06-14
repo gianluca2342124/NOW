@@ -13,6 +13,13 @@ const DAY = 24 * 60 * 60 * 1000;
 interface TmResponse {
   _embedded?: { events?: TmEvent[] };
 }
+interface TmClassification {
+  segment?: { name?: string };
+  genre?: { name?: string };
+  subGenre?: { name?: string };
+  type?: { name?: string };
+  subType?: { name?: string };
+}
 interface TmEvent {
   id: string;
   name: string;
@@ -22,7 +29,7 @@ interface TmEvent {
     start?: { dateTime?: string; localDate?: string; localTime?: string };
     end?: { dateTime?: string };
   };
-  classifications?: { segment?: { name?: string }; genre?: { name?: string } }[];
+  classifications?: TmClassification[];
   priceRanges?: { min?: number; max?: number; currency?: string }[];
   _embedded?: {
     venues?: {
@@ -33,6 +40,18 @@ interface TmEvent {
   };
 }
 
+interface TmSample {
+  name: string;
+  segment?: string;
+  genre?: string;
+  subGenre?: string;
+  type?: string;
+  subType?: string;
+  venue?: string;
+  start?: string;
+  end?: string | null;
+}
+
 export interface TmDebug {
   enabled: boolean;
   httpOk: boolean;
@@ -40,6 +59,7 @@ export interface TmDebug {
   parsedCount: number;
   dropReasons: Record<string, number>;
   categoryDistribution: Record<string, number>;
+  sample: TmSample[];
 }
 
 const LABELS: Record<EventCategory, { label: string; short: string }> = {
@@ -54,23 +74,109 @@ const LABELS: Record<EventCategory, { label: string; short: string }> = {
   other: { label: 'Event', short: 'NOW' },
 };
 
+/** All classification name fields across all classifications, lowercased. */
+function classificationText(ev: TmEvent): string {
+  return (ev.classifications ?? [])
+    .flatMap((c) => [
+      c.segment?.name,
+      c.genre?.name,
+      c.subGenre?.name,
+      c.type?.name,
+      c.subType?.name,
+    ])
+    .filter((s): s is string => !!s && s.toLowerCase() !== 'undefined')
+    .join(' ')
+    .toLowerCase();
+}
+
+/**
+ * Robust category mapping. Ticketmaster often returns "Miscellaneous"/
+ * "Undefined" segments, so we honour the segment when meaningful and otherwise
+ * infer from genre/subGenre/type keywords.
+ */
 function tmCategory(ev: TmEvent): EventCategory {
-  const c = ev.classifications?.[0];
-  const segment = c?.segment?.name ?? '';
-  const genre = c?.genre?.name ?? '';
-  switch (segment) {
-    case 'Music':
-      return /electron|dance|house|techno|club|dj/i.test(genre)
-        ? 'nightlife'
-        : 'music';
-    case 'Sports':
-      return 'sports';
-    case 'Arts & Theatre':
-    case 'Film':
-      return 'culture';
-    default:
-      return 'other';
-  }
+  const segment = (ev.classifications?.[0]?.segment?.name ?? '').toLowerCase();
+  const all = classificationText(ev);
+  const has = (...words: string[]) => words.some((w) => all.includes(w));
+
+  const nightlife = has(
+    'electronic',
+    'dance/electronic',
+    'dance ',
+    'club',
+    'dj',
+    'techno',
+    'house',
+    'party',
+    'rave',
+    'edm',
+  );
+
+  // 1) Meaningful segment first.
+  if (segment.includes('music')) return nightlife ? 'nightlife' : 'music';
+  if (segment.includes('sport')) return 'sports';
+  if (segment.includes('art') || segment.includes('theat')) return 'culture';
+  if (segment.includes('film')) return 'culture';
+
+  // 2) Miscellaneous / Undefined / empty → infer from all classification text.
+  if (has('food', 'wine', 'beer', 'gastro', 'tast', 'culinary')) return 'food';
+  if (nightlife) return 'nightlife';
+  if (
+    has(
+      'sport',
+      'football',
+      'soccer',
+      'basket',
+      'tennis',
+      'running',
+      'marathon',
+      'cycling',
+      'motor',
+      'rugby',
+      'hockey',
+    )
+  )
+    return 'sports';
+  if (
+    has(
+      'comedy',
+      'theatre',
+      'theater',
+      'teatre',
+      'musical',
+      'opera',
+      'ballet',
+      'dance',
+      'circus',
+      'magic',
+      'cabaret',
+    )
+  )
+    return 'culture';
+  if (has('exhibition', 'museum', 'art ', 'gallery')) return 'exhibition';
+  if (has('festival', 'family', 'children', 'fair')) return 'culture';
+  if (
+    has(
+      'concert',
+      'music',
+      'rock',
+      'pop',
+      'jazz',
+      'indie',
+      'metal',
+      'hip-hop',
+      'rap',
+      'reggae',
+      'flamenco',
+      'classical',
+      'folk',
+      'blues',
+      'soul',
+      'latin',
+    )
+  )
+    return 'music';
+  return 'other';
 }
 
 function priceLabel(ev: TmEvent): string | undefined {
@@ -98,6 +204,7 @@ export async function loadTicketmaster(
     parsedCount: 0,
     dropReasons: {},
     categoryDistribution: {},
+    sample: [],
   };
 
   const key = process.env.TICKETMASTER_API_KEY;
@@ -114,6 +221,22 @@ export async function loadTicketmaster(
 
   const events = data._embedded?.events ?? [];
   debug.rawEventCount = events.length;
+
+  // Diagnostic sample: first 5 events' raw classification + venue + dates.
+  debug.sample = events.slice(0, 5).map((ev) => {
+    const c = ev.classifications?.[0];
+    return {
+      name: ev.name,
+      segment: c?.segment?.name,
+      genre: c?.genre?.name,
+      subGenre: c?.subGenre?.name,
+      type: c?.type?.name,
+      subType: c?.subType?.name,
+      venue: ev._embedded?.venues?.[0]?.name,
+      start: ev.dates?.start?.dateTime ?? ev.dates?.start?.localDate,
+      end: ev.dates?.end?.dateTime ?? null,
+    };
+  });
 
   const out: RawActivity[] = [];
   for (const ev of events) {
