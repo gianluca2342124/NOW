@@ -58,6 +58,8 @@ export interface DisplayStatusConfig {
 export const DISPLAY_STATUS_CONFIG: Record<DisplayStatus, DisplayStatusConfig> = {
   verified_live: { label: 'Live now', color: '#f59e0b', hot: true },
   happening_now: { label: 'Happening now', color: '#38bdf8', hot: true },
+  open_today: { label: 'Open today', color: '#7dd3fc', hot: false },
+  ongoing: { label: 'Ongoing', color: '#94a3b8', hot: false },
   starting_soon: { label: 'Starting soon', color: '#fbbf24', hot: false },
   tonight: { label: 'Tonight', color: '#7dd3fc', hot: false },
   today: { label: 'Today', color: '#a5b4fc', hot: false },

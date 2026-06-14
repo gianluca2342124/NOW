@@ -6,6 +6,7 @@ import { curatedFallback } from './_lib/curatedFallback';
 import { loadBarcelonaOpenData } from './_lib/sources/barcelonaOpenData';
 import { loadTicketmaster } from './_lib/sources/ticketmaster';
 import { basePulse, isNowTab, isTonightTab, serverStatus } from './_lib/intelligence';
+import { classifyActivityType, productScore } from './_lib/product';
 
 export const config = { runtime: 'edge' };
 
@@ -49,8 +50,10 @@ async function assembleFeed(now: number): Promise<Feed> {
     }
   });
 
+  // Source priority emerges from productScore: featured ≫ ticketed ≫ exact-time
+  // open data ≫ exhibitions/ongoing ≫ low-score.
   let activities = dedupeActivities(collected).sort(
-    (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt),
+    (a, b) => (b.productScore ?? 0) - (a.productScore ?? 0),
   );
   let fallback = false;
   if (activities.length === 0) {
@@ -94,6 +97,19 @@ function intelligenceDebug(activities: Activity[], now: number) {
       featured: !!a.featured,
     }));
 
+  const topProduct = activities
+    .map((a) => ({ a, score: a.productScore ?? productScore(a, now) }))
+    .sort((x, y) => y.score - x.score)
+    .slice(0, 10)
+    .map(({ a, score }) => ({
+      title: a.title,
+      productScore: score,
+      activityType: a.activityType ?? classifyActivityType(a),
+      status: serverStatus(a, now),
+      source: a.sourceName,
+      featured: !!a.featured,
+    }));
+
   return {
     totalCount: activities.length,
     statusDistribution: countBy(statuses),
@@ -102,9 +118,18 @@ function intelligenceDebug(activities: Activity[], now: number) {
     hiddenLowPulseCount: Math.max(0, activities.length - MAX_MAP_ACTIVITIES),
     nowFilterCount: activities.filter((a) => isNowTab(a, now)).length,
     tonightFilterCount: activities.filter((a) => isTonightTab(a, now)).length,
+    tomorrowFilterCount: activities.filter((a) => serverStatus(a, now) === 'tomorrow').length,
     featuredCount: activities.filter((a) => a.featured).length,
-    // clusterCount depends on the client viewport/zoom and is computed there.
     clusterCount: null,
+    // --- Phase 8 product observability ---
+    bySource: countBy(activities.map((a) => a.sourceName)),
+    byActivityType: countBy(activities.map((a) => a.activityType ?? classifyActivityType(a))),
+    byDisplayStatus: countBy(statuses),
+    topProductScore: topProduct,
+    hiddenLowQualityCount: activities.filter((a) => (a.productScore ?? 0) < 35).length,
+    openDataCount: activities.filter((a) => a.sourceName === 'Barcelona Open Data').length,
+    ticketmasterCount: activities.filter((a) => a.sourceName === 'Ticketmaster').length,
+    manualFeaturedCount: activities.filter((a) => a.sourceName === 'NOW Featured').length,
   };
 }
 

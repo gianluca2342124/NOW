@@ -44,6 +44,21 @@ export type VerificationStatus =
   | 'community_reported'
   | 'unknown';
 
+export type ActivityType =
+  | 'concert'
+  | 'club_night'
+  | 'theatre'
+  | 'sports_match'
+  | 'exhibition'
+  | 'food_event'
+  | 'market'
+  | 'festival'
+  | 'meetup'
+  | 'civic'
+  | 'family'
+  | 'tourist_attraction'
+  | 'other';
+
 export interface Activity {
   id: string;
   title: string;
@@ -78,6 +93,8 @@ export interface Activity {
   venueId?: string;
   organizerId?: string;
   affiliateUrl?: string;
+  activityType?: ActivityType;
+  productScore?: number;
 }
 
 /** A loose record emitted by a source before normalization. */
@@ -99,6 +116,7 @@ export interface RawActivity {
   hidden?: boolean;
   manualImportance?: number;
   promoted?: boolean;
+  activityType?: ActivityType;
   /** Optional source-provided presentation (overrides category defaults). */
   activityLabel?: string;
   shortMapLabel?: string;

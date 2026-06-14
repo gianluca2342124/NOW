@@ -9,6 +9,8 @@ import type { Activity, EventCategory, VerificationStatus } from './types';
 export type ServerStatus =
   | 'verified_live'
   | 'happening_now'
+  | 'open_today'
+  | 'ongoing'
   | 'starting_soon'
   | 'tonight'
   | 'today'
@@ -43,7 +45,14 @@ export function serverStatus(a: Activity, now: number): ServerStatus {
     a.endsAt &&
     (a.verificationStatus === 'official_source' || a.verificationStatus === 'verified');
   if (liveEligible && end !== null && start <= now && now < end) return 'verified_live';
-  if (end !== null && start <= now && now < end) return 'happening_now';
+
+  if (end !== null && start <= now && now < end) {
+    const durH = (end - start) / HOUR;
+    if (durH <= 6) return 'happening_now';
+    if (durH >= 48) return 'ongoing';
+    return 'open_today';
+  }
+  if (end === null && start <= now) return sameDay(start, now) ? 'open_today' : 'ongoing';
 
   if (start > now) {
     const mins = (start - now) / MINUTE;
@@ -52,7 +61,6 @@ export function serverStatus(a: Activity, now: number): ServerStatus {
     if (sameDay(start, now + DAY)) return 'tomorrow';
     return 'upcoming';
   }
-  if (sameDay(start, now)) return new Date(start).getHours() >= EVENING_HOUR ? 'tonight' : 'today';
   return 'upcoming';
 }
 
@@ -68,6 +76,7 @@ export function isTonightTab(a: Activity, now: number): boolean {
   return (
     s === 'verified_live' ||
     s === 'happening_now' ||
+    s === 'open_today' ||
     s === 'starting_soon' ||
     s === 'tonight' ||
     s === 'today'

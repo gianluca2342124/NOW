@@ -56,12 +56,30 @@ export type VerificationStatus =
 export type DisplayStatus =
   | 'verified_live'
   | 'happening_now'
+  | 'open_today'
+  | 'ongoing'
   | 'starting_soon'
   | 'tonight'
   | 'today'
   | 'tomorrow'
   | 'upcoming'
   | 'ended';
+
+/** Internal activity taxonomy used for product scoring & relevance. */
+export type ActivityType =
+  | 'concert'
+  | 'club_night'
+  | 'theatre'
+  | 'sports_match'
+  | 'exhibition'
+  | 'food_event'
+  | 'market'
+  | 'festival'
+  | 'meetup'
+  | 'civic'
+  | 'family'
+  | 'tourist_attraction'
+  | 'other';
 
 /** Factual time bucket, independent of trust. Derived. */
 export type TimeState =
@@ -132,6 +150,9 @@ export interface Activity {
   organizerId?: string;
   /** Future affiliate ticketing link. */
   affiliateUrl?: string;
+  /** Internal taxonomy + product score (set by the server pipeline). */
+  activityType?: ActivityType;
+  productScore?: number;
 }
 
 /** Merged source attribution carried by a deduplicated activity. */

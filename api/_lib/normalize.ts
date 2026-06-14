@@ -4,6 +4,7 @@ import {
   MOOD_BY_CATEGORY,
   SHORT_LABEL_BY_CATEGORY,
 } from './categories';
+import { classifyActivityType, describe, productScore } from './product';
 
 /**
  * Raw → Activity. Where provenance becomes trust (mirrors the client's
@@ -34,7 +35,7 @@ export function normalize(
 
   const category = raw.category;
 
-  return {
+  const activity: Activity = {
     id: `${source.id}:${raw.id}`,
     title: raw.title.trim(),
     activityLabel: raw.activityLabel ?? ACTIVITY_LABEL_BY_CATEGORY[category],
@@ -55,14 +56,27 @@ export function normalize(
     lastCheckedAt: new Date(now).toISOString(),
     importance: clamp01(raw.importance ?? 0.5),
     priceLabel: raw.priceLabel?.trim() || 'See source',
-    description: raw.description?.trim() || `${raw.title.trim()} — via ${source.sourceName}.`,
+    description: raw.description?.trim() ?? '',
     tags: raw.tags ?? [],
-    // Auto-feature high-signal events until an admin layer exists (Phase 5).
     featured: raw.featured ?? (raw.importance ?? 0) >= 0.85,
     hidden: raw.hidden ?? false,
     manualImportance: raw.manualImportance,
     promoted: raw.promoted,
   };
+
+  // Product intelligence: activity type, short description, product score.
+  activity.activityType = raw.activityType ?? classifyActivityType(activity);
+  const generic =
+    !activity.description ||
+    /via\s/i.test(activity.description) ||
+    activity.description.toLowerCase() === activity.title.toLowerCase();
+  // Regenerate weak/generic descriptions for official + open-data records.
+  if (generic || source.sourceType === 'official') {
+    activity.description = describe(activity, now);
+  }
+  activity.importance = clamp01(productScore(activity, now) / 100);
+  activity.productScore = productScore(activity, now);
+  return activity;
 }
 
 /**

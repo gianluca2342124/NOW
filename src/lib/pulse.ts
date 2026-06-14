@@ -77,32 +77,35 @@ function oneOffScore(activity: Activity): number {
 }
 
 /**
- * Compute pulse 0..100. Featured/promoted/manualImportance are additive hooks
- * for the future admin/business layer.
+ * Compute pulse 0..100 — the on-map ranking signal.
+ *
+ * When the server has provided a `productScore` (the relevance-first quality
+ * metric), that is the base and the client only adds a small proximity bonus so
+ * nearer activities rise. Otherwise (offline curated) it falls back to a local
+ * blend. Featured/promoted/manualImportance remain additive hooks.
  */
 export function pulseScore(activity: Activity, now: number, userLocation: LngLat | null): number {
-  const timeRel = timeRelevance(activity, now);
   const proximity = proximityScore(activity, userLocation);
-  const trust = VERIFICATION_TRUST[activity.verificationStatus];
-  const category = CATEGORY_WEIGHT[activity.category];
-  const importance = clamp01(activity.importance);
-  const ticketed = activity.sourceType === 'ticketing' ? 1 : 0;
-  const oneOff = oneOffScore(activity);
 
-  const base =
-    0.3 * timeRel +
-    0.17 * proximity +
-    0.13 * trust +
-    0.14 * category +
-    0.12 * importance +
-    0.07 * ticketed +
-    0.07 * oneOff;
+  let score: number;
+  if (typeof activity.productScore === 'number') {
+    // productScore already bakes in time/type/ticketed/featured/etc.
+    score = activity.productScore + (userLocation ? proximity * 12 : 0);
+  } else {
+    const base =
+      0.3 * timeRelevance(activity, now) +
+      0.17 * proximity +
+      0.13 * VERIFICATION_TRUST[activity.verificationStatus] +
+      0.14 * CATEGORY_WEIGHT[activity.category] +
+      0.12 * clamp01(activity.importance) +
+      0.07 * (activity.sourceType === 'ticketing' ? 1 : 0) +
+      0.07 * oneOffScore(activity);
+    score = 100 * clamp01(base);
+    if (activity.featured) score += FEATURED_BOOST;
+    if (activity.promoted) score += PROMOTED_BOOST;
+    if (activity.manualImportance) score += activity.manualImportance * 20;
+  }
 
-  let score = 100 * clamp01(base);
-  if (activity.featured) score += FEATURED_BOOST;
-  if (activity.promoted) score += PROMOTED_BOOST;
-  if (activity.manualImportance) score += activity.manualImportance * 20;
-
-  if (!Number.isFinite(score)) return 0; // never let NaN poison ranking
+  if (!Number.isFinite(score)) return 0;
   return Math.round(Math.min(100, Math.max(0, score)));
 }

@@ -22,8 +22,11 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 const MAPBOX_STYLE =
   import.meta.env.VITE_MAPBOX_STYLE || 'mapbox://styles/mapbox/dark-v11';
 
-/** Relevance-first: only the strongest activities reach the map (Phase 3). */
-const MAX_MAP_ACTIVITIES = 40;
+/** Relevance-first: only the strongest activities reach the map. */
+const MAX_MAP_ACTIVITIES = 30;
+const TAB_CAP: Record<string, number> = { now: 15, tonight: 25, tomorrow: 25 };
+/** Below this product score, hide from the default view (unless a category filter is on). */
+const LOW_SCORE_MIN = 35;
 
 interface MapViewProps {
   activities: Activity[];
@@ -159,10 +162,20 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
       }
     }
 
-    const ranked = pool
+    // Hide low-quality records in the default view (Open Data noise), but keep
+    // them reachable when the user explicitly filters a category.
+    const categoryActive = activeCategories.size > 0;
+    let scopedPool = pool;
+    if (!categoryActive) {
+      const filtered = pool.filter((a) => (a.productScore ?? 50) >= LOW_SCORE_MIN);
+      if (filtered.length > 0) scopedPool = filtered;
+    }
+
+    const cap = Math.min(MAX_MAP_ACTIVITIES, TAB_CAP[timeFilter] ?? MAX_MAP_ACTIVITIES);
+    const ranked = scopedPool
       .map((a) => ({ a, pulse: pulseScore(a, now, userLocation) }))
       .sort((x, y) => y.pulse - x.pulse)
-      .slice(0, MAX_MAP_ACTIVITIES)
+      .slice(0, cap)
       .map((r) => r.a);
 
     if (import.meta.env.DEV) {

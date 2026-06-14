@@ -1,5 +1,5 @@
 import type { Activity } from '@/types/activity';
-import { deriveTimeState } from '@/lib/status';
+import { deriveDisplayStatus } from '@/lib/status';
 
 const MINUTE = 60 * 1000;
 
@@ -11,15 +11,19 @@ const MINUTE = 60 * 1000;
 export function formatScheduleLabel(activity: Activity, now: number): string {
   const start = Date.parse(activity.startsAt);
   const end = activity.endsAt ? Date.parse(activity.endsAt) : null;
-  const timeState = deriveTimeState(activity, now);
+  const status = deriveDisplayStatus(activity, now);
 
-  if (timeState === 'soon') {
+  if (status === 'starting_soon') {
     const mins = Math.max(1, Math.round((start - now) / MINUTE));
     return `Starts in ${mins} min · ${formatClock(start)}`;
   }
-
-  if (timeState === 'ongoing' && end !== null) {
-    return `On now · until ${formatClock(end)}`;
+  // Honest "now" labels — no misleading "until 05:00" for all-day records.
+  if (status === 'happening_now' && end !== null) {
+    return `Happening now · until ${formatClock(end)}`;
+  }
+  if (status === 'open_today') return 'Open today';
+  if (status === 'ongoing') {
+    return end !== null ? `Ongoing · until ${formatDay(end)}` : 'Ongoing';
   }
 
   const prefix = dayPrefix(start, now);
