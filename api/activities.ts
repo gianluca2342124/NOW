@@ -5,8 +5,12 @@ import { dedupeActivities } from './_lib/dedupe';
 import { curatedFallback } from './_lib/curatedFallback';
 import { loadBarcelonaOpenData } from './_lib/sources/barcelonaOpenData';
 import { loadTicketmaster } from './_lib/sources/ticketmaster';
+import { basePulse, isNowTab, isTonightTab, serverStatus } from './_lib/intelligence';
 
 export const config = { runtime: 'edge' };
+
+/** Mirrors the client's relevance-first map cap (Phase 3). */
+const MAX_MAP_ACTIVITIES = 40;
 
 function json(body: unknown, cacheControl: string): Response {
   return new Response(JSON.stringify(body), {
@@ -15,9 +19,94 @@ function json(body: unknown, cacheControl: string): Response {
   });
 }
 
-/** Temporary diagnostics for /api/activities?debug=1. */
+interface Feed {
+  activities: Activity[];
+  sources: string[];
+  fallback: boolean;
+}
+
+/** Run every enabled source → normalize → drop hidden → dedupe → sort. */
+async function assembleFeed(now: number): Promise<Feed> {
+  const sources = SERVER_SOURCES.filter((s) => s.isEnabled());
+  const settled = await Promise.allSettled(
+    sources.map(async (source) => {
+      const raw = await source.fetch({ now });
+      return raw
+        .map((r) => normalize(r, source, now))
+        .filter((a): a is Activity => a !== null && !a.hidden);
+    }),
+  );
+
+  const collected: Activity[] = [];
+  const contributing: string[] = [];
+  settled.forEach((result, i) => {
+    if (result.status === 'fulfilled' && result.value.length > 0) {
+      collected.push(...result.value);
+      contributing.push(sources[i].sourceName);
+    }
+  });
+
+  let activities = dedupeActivities(collected).sort(
+    (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt),
+  );
+  let fallback = false;
+  if (activities.length === 0) {
+    activities = curatedFallback(now);
+    fallback = true;
+  }
+  return { activities, sources: contributing, fallback };
+}
+
+function countBy<T extends string>(items: T[]): Record<string, number> {
+  const d: Record<string, number> = {};
+  for (const it of items) d[it] = (d[it] ?? 0) + 1;
+  return d;
+}
+
+/** Phase 7 observability over the final feed. */
+function intelligenceDebug(activities: Activity[], now: number) {
+  const statuses = activities.map((a) => serverStatus(a, now));
+  const pulses = activities.map((a) => basePulse(a, now));
+
+  const pulseBuckets: Record<string, number> = { '0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0 };
+  for (const p of pulses) {
+    if (p < 20) pulseBuckets['0-20'] += 1;
+    else if (p < 40) pulseBuckets['20-40'] += 1;
+    else if (p < 60) pulseBuckets['40-60'] += 1;
+    else if (p < 80) pulseBuckets['60-80'] += 1;
+    else pulseBuckets['80-100'] += 1;
+  }
+
+  const topPulse = activities
+    .map((a) => ({ a, pulse: basePulse(a, now) }))
+    .sort((x, y) => y.pulse - x.pulse)
+    .slice(0, 8)
+    .map(({ a, pulse }) => ({
+      title: a.title,
+      category: a.category,
+      pulse,
+      status: serverStatus(a, now),
+      source: a.sourceName,
+      featured: !!a.featured,
+    }));
+
+  return {
+    totalCount: activities.length,
+    statusDistribution: countBy(statuses),
+    pulseDistribution: pulseBuckets,
+    topPulseActivities: topPulse,
+    hiddenLowPulseCount: Math.max(0, activities.length - MAX_MAP_ACTIVITIES),
+    nowFilterCount: activities.filter((a) => isNowTab(a, now)).length,
+    tonightFilterCount: activities.filter((a) => isTonightTab(a, now)).length,
+    featuredCount: activities.filter((a) => a.featured).length,
+    // clusterCount depends on the client viewport/zoom and is computed there.
+    clusterCount: null,
+  };
+}
+
 async function buildDebug(now: number) {
-  const [{ activities: raws, debug }, tm] = await Promise.all([
+  const [feed, { activities: raws, debug }, tm] = await Promise.all([
+    assembleFeed(now),
     loadBarcelonaOpenData(now),
     loadTicketmaster(now),
   ]);
@@ -30,6 +119,9 @@ async function buildDebug(now: number) {
   }
   return {
     generatedAt: new Date(now).toISOString(),
+    sources: feed.sources,
+    fallback: feed.fallback,
+    intelligence: intelligenceDebug(feed.activities, now),
     ticketmaster: tm.debug,
     barcelonaOpenData: {
       datasetIdsAttempted: debug.datasetIdsAttempted,
@@ -49,7 +141,6 @@ async function buildDebug(now: number) {
       categoryCaps: debug.categoryCaps,
       maxShare: debug.maxShare,
       categoryDistribution: debug.categoryDistribution,
-      // normalize stage (bbox/date validity on the final set)
       normalizedCount,
       droppedAtNormalize: raws.length - normalizedCount,
       normalizeDropReasons,
@@ -58,15 +149,8 @@ async function buildDebug(now: number) {
 }
 
 /**
- * GET /api/activities
- *
- * Runs every enabled source in parallel (fault-tolerant), normalizes each into
- * the Activity shape, dedupes across sources, and returns a trust-scored feed.
- * Falls back to a small curated set ONLY when no real source yields data, so
- * the map is never empty and never lies.
- *
- * The Eventbrite/Ticketmaster/Songkick keys (when present) live server-side
- * only — they are never sent to the client.
+ * GET /api/activities — real, trust-scored Barcelona activity feed.
+ * Source keys (Ticketmaster etc.) live server-side only; never sent to client.
  */
 export default async function handler(req: Request): Promise<Response> {
   const now = Date.now();
@@ -75,51 +159,15 @@ export default async function handler(req: Request): Promise<Response> {
     return json(await buildDebug(now), 'no-store');
   }
 
-  const sources = SERVER_SOURCES.filter((s) => s.isEnabled());
-
-  const settled = await Promise.allSettled(
-    sources.map(async (source) => {
-      const raw = await source.fetch({ now });
-      return raw
-        .map((r) => normalize(r, source, now))
-        .filter((a): a is Activity => a !== null);
-    }),
-  );
-
-  const collected: Activity[] = [];
-  const contributing: string[] = [];
-  settled.forEach((result, i) => {
-    if (result.status === 'fulfilled' && result.value.length > 0) {
-      collected.push(...result.value);
-      contributing.push(sources[i].sourceName);
-    }
-  });
-
-  let activities = dedupeActivities(collected).sort(
-    (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt),
-  );
-
-  let fallback = false;
-  if (activities.length === 0) {
-    activities = curatedFallback(now);
-    fallback = true;
-  }
-
-  return new Response(
-    JSON.stringify({
-      generatedAt: new Date(now).toISOString(),
-      sources: contributing,
-      fallback,
-      count: activities.length,
-      activities,
-    }),
+  const feed = await assembleFeed(now);
+  return json(
     {
-      status: 200,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        // Edge-cache for 10 min; serve stale for up to 20 while revalidating.
-        'cache-control': 's-maxage=600, stale-while-revalidate=1200',
-      },
+      generatedAt: new Date(now).toISOString(),
+      sources: feed.sources,
+      fallback: feed.fallback,
+      count: feed.activities.length,
+      activities: feed.activities,
     },
+    's-maxage=600, stale-while-revalidate=1200',
   );
 }

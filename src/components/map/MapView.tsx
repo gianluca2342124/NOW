@@ -2,17 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence } from 'framer-motion';
 import mapboxgl from 'mapbox-gl';
+import Supercluster from 'supercluster';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 import type { Activity } from '@/types/activity';
 import { BARCELONA_CENTER } from '@/lib/geo';
-import { deriveDisplayStatus, deriveTimeState } from '@/lib/status';
+import { deriveDisplayStatus, deriveTimeState, isEnded, isTonightish } from '@/lib/status';
 import { INTENSITY_BY_TIME_STATE } from '@/lib/categories';
-import { emphasisScore } from '@/lib/emphasis';
-import { visibleActivityIds } from '@/lib/filters';
-import { getBubbleMotion } from '@/lib/bubble';
+import { pulseScore } from '@/lib/pulse';
+import { passesTimeFilter, passesTrustFilter } from '@/lib/filters';
 import { useNowStore } from '@/store/useNowStore';
 import { ActivityBubble } from './ActivityBubble';
+import { ClusterBubble } from './ClusterBubble';
 import { UserLocationMarker } from './UserLocationMarker';
 import { RecenterButton } from './RecenterButton';
 import { MapErrorState, type MapErrorVariant } from './MapErrorState';
@@ -21,31 +22,34 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 const MAPBOX_STYLE =
   import.meta.env.VITE_MAPBOX_STYLE || 'mapbox://styles/mapbox/dark-v11';
 
+/** Relevance-first: only the strongest activities reach the map (Phase 3). */
+const MAX_MAP_ACTIVITIES = 40;
+
 interface MapViewProps {
-  /** Stable list of all activities — reference must NOT change every tick. */
   activities: Activity[];
   now: number;
-  /** Kick off (or re-request) geolocation; owned by App. */
   onRequestLocation: () => void;
 }
 
-/**
- * Mapbox GL map centered on Barcelona. Each activity is a native Mapbox Marker
- * whose stable DOM container hosts a React-rendered <ActivityBubble> (portal).
- *
- * Markers are created once and never torn down by the clock or filters — the
- * ticking `now`, the live user location and the active filters only update
- * bubble props / visibility. Honest display status is derived per render.
- */
+type LeafProps = { activityId: string; pulse: number };
+
+interface Feature {
+  key: string;
+  kind: 'cluster' | 'leaf';
+  lng: number;
+  lat: number;
+  count?: number;
+  clusterId?: number;
+  activityId?: string;
+  intensity: number;
+}
+
 export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [ready, setReady] = useState(false);
   const [errorVariant, setErrorVariant] = useState<MapErrorVariant | null>(
     MAPBOX_TOKEN ? null : 'missing',
-  );
-  const [markerNodes, setMarkerNodes] = useState<Map<string, HTMLDivElement>>(
-    () => new Map(),
   );
 
   const selectedActivityId = useNowStore((s) => s.selectedActivityId);
@@ -64,7 +68,6 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
   useEffect(() => {
     if (!MAPBOX_TOKEN || !containerRef.current) return;
     mapboxgl.accessToken = MAPBOX_TOKEN;
-
     const map = new mapboxgl.Map({
       container: containerRef.current,
       style: MAPBOX_STYLE,
@@ -82,12 +85,9 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
       if (status === 401 || status === 403) setErrorVariant('auth');
       else if (status !== undefined && status >= 400) setErrorVariant('unknown');
     });
-
     map.on('load', () => {
       try {
-        if (map.getLayer('water')) {
-          map.setPaintProperty('water', 'fill-color', '#0a0f1a');
-        }
+        if (map.getLayer('water')) map.setPaintProperty('water', 'fill-color', '#0a0f1a');
         map.setFog({
           color: 'rgb(20, 16, 12)',
           'high-color': 'rgb(28, 20, 10)',
@@ -96,7 +96,7 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
           'star-intensity': 0.1,
         });
       } catch {
-        // Non-fatal: stock style still looks fine without tuning.
+        /* non-fatal */
       }
       setReady(true);
     });
@@ -107,41 +107,15 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
     };
   }, []);
 
-  // --- Create one Marker per activity, ONCE (stable identity, not the clock) ---
+  // --- User-location marker + first-fix auto-center ---
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
-
-    const markers: mapboxgl.Marker[] = [];
-    const nodes = new Map<string, HTMLDivElement>();
-    for (const activity of activities) {
-      const node = document.createElement('div');
-      nodes.set(activity.id, node);
-      const marker = new mapboxgl.Marker({ element: node, anchor: 'center' })
-        .setLngLat([activity.coordinates.lng, activity.coordinates.lat])
-        .addTo(map);
-      markers.push(marker);
-    }
-    setMarkerNodes(nodes);
-
-    return () => {
-      markers.forEach((m) => m.remove());
-      setMarkerNodes(new Map());
-    };
-    // `now` / filters deliberately excluded: markers must survive every tick.
-  }, [activities, ready]);
-
-  // --- User-location marker: create/update/remove + first-fix auto-center ---
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready) return;
-
     if (!userLocation) {
       userMarkerRef.current?.remove();
       userMarkerRef.current = null;
       return;
     }
-
     const lngLat: [number, number] = [userLocation.lng, userLocation.lat];
     if (!userMarkerRef.current) {
       const node = document.createElement('div');
@@ -152,53 +126,182 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
     } else {
       userMarkerRef.current.setLngLat(lngLat);
     }
-
     if (!hasAutoCenteredRef.current) {
       hasAutoCenteredRef.current = true;
       map.flyTo({ center: lngLat, zoom: 14.5, speed: 1.2, essential: true });
     }
   }, [userLocation, ready]);
 
-  // --- Derived per-render data (no marker churn) ---
-  const displayStatuses = useMemo(() => {
-    const m = new Map<string, ReturnType<typeof deriveDisplayStatus>>();
-    for (const a of activities) m.set(a.id, deriveDisplayStatus(a, now));
-    return m;
-  }, [activities, now]);
+  // --- Pulse-ranked candidate set + empty-state fallback (Phase 3 & 6) ---
+  const { candidates, usingFallback } = useMemo(() => {
+    const alive = activities.filter((a) => !a.hidden && !isEnded(a, now));
 
-  const intensities = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const a of activities) {
-      m.set(a.id, INTENSITY_BY_TIME_STATE[deriveTimeState(a, now)]);
+    const matched = alive.filter(
+      (a) =>
+        passesTimeFilter(a, timeFilter, now) &&
+        (activeCategories.size === 0 || activeCategories.has(a.category)) &&
+        passesTrustFilter(a, trustFilter),
+    );
+
+    // The map should never feel empty: if "Now" is empty, surface tonight.
+    let fallback = false;
+    let pool = matched;
+    if (matched.length === 0 && timeFilter === 'now') {
+      pool = alive.filter(
+        (a) =>
+          isTonightish(a, now) &&
+          (activeCategories.size === 0 || activeCategories.has(a.category)) &&
+          passesTrustFilter(a, trustFilter),
+      );
+      fallback = pool.length > 0;
     }
-    return m;
-  }, [activities, now]);
 
-  const emphases = useMemo(() => {
+    const ranked = pool
+      .map((a) => ({ a, pulse: pulseScore(a, now, userLocation) }))
+      .sort((x, y) => y.pulse - x.pulse)
+      .slice(0, MAX_MAP_ACTIVITIES)
+      .map((r) => r.a);
+
+    return { candidates: ranked, usingFallback: fallback };
+  }, [activities, now, timeFilter, activeCategories, trustFilter, userLocation]);
+
+  const activityById = useMemo(() => {
+    const m = new Map<string, Activity>();
+    for (const a of candidates) m.set(a.id, a);
+    return m;
+  }, [candidates]);
+
+  const pulseById = useMemo(() => {
     const m = new Map<string, number>();
-    for (const a of activities) m.set(a.id, emphasisScore(a, now, userLocation));
+    for (const a of candidates) m.set(a.id, pulseScore(a, now, userLocation));
     return m;
-  }, [activities, now, userLocation]);
+  }, [candidates, now, userLocation]);
 
-  const visibleIds = useMemo(
-    () =>
-      visibleActivityIds(activities, timeFilter, activeCategories, now, trustFilter),
-    [activities, timeFilter, activeCategories, now, trustFilter],
-  );
+  // --- Supercluster index over candidates ---
+  const index = useMemo(() => {
+    const sc = new Supercluster<LeafProps>({ radius: 60, maxZoom: 16, minPoints: 2 });
+    sc.load(
+      candidates.map((a) => ({
+        type: 'Feature' as const,
+        geometry: { type: 'Point' as const, coordinates: [a.coordinates.lng, a.coordinates.lat] },
+        properties: { activityId: a.id, pulse: pulseById.get(a.id) ?? 0 },
+      })),
+    );
+    return sc;
+  }, [candidates, pulseById]);
+
+  // --- Recompute clusters on viewport change ---
+  const [features, setFeatures] = useState<Feature[]>([]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    const update = () => {
+      const b = map.getBounds();
+      if (!b) return;
+      const zoom = Math.round(map.getZoom());
+      const clusters = index.getClusters(
+        [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
+        zoom,
+      );
+      const next: Feature[] = clusters.map((c) => {
+        const [lng, lat] = c.geometry.coordinates;
+        if ((c.properties as { cluster?: boolean }).cluster) {
+          const props = c.properties as Supercluster.ClusterProperties;
+          const leaves = index.getLeaves(props.cluster_id, Infinity);
+          const intensity =
+            Math.max(0, ...leaves.map((l) => (l.properties as LeafProps).pulse)) / 100;
+          return {
+            key: `cluster:${props.cluster_id}`,
+            kind: 'cluster',
+            lng,
+            lat,
+            count: props.point_count,
+            clusterId: props.cluster_id,
+            intensity,
+          };
+        }
+        const id = (c.properties as LeafProps).activityId;
+        return {
+          key: `act:${id}`,
+          kind: 'leaf',
+          lng,
+          lat,
+          activityId: id,
+          intensity: (pulseById.get(id) ?? 0) / 100,
+        };
+      });
+      setFeatures(next);
+    };
+
+    update();
+    map.on('moveend', update);
+    map.on('zoomend', update);
+    return () => {
+      map.off('moveend', update);
+      map.off('zoomend', update);
+    };
+  }, [index, ready, pulseById]);
+
+  // --- Diff markers to match current features (cluster-aware) ---
+  const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  const nodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [nodes, setNodes] = useState<Map<string, HTMLDivElement>>(() => new Map());
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const markers = markersRef.current;
+    const seen = new Set<string>();
+    const nextNodes = new Map<string, HTMLDivElement>();
+
+    for (const f of features) {
+      seen.add(f.key);
+      let marker = markers.get(f.key);
+      if (!marker) {
+        const node = document.createElement('div');
+        nodesRef.current.set(f.key, node);
+        marker = new mapboxgl.Marker({ element: node, anchor: 'center' })
+          .setLngLat([f.lng, f.lat])
+          .addTo(map);
+        markers.set(f.key, marker);
+      } else {
+        marker.setLngLat([f.lng, f.lat]);
+      }
+      nextNodes.set(f.key, nodesRef.current.get(f.key)!);
+    }
+    for (const [key, marker] of markers) {
+      if (!seen.has(key)) {
+        marker.remove();
+        markers.delete(key);
+        nodesRef.current.delete(key);
+      }
+    }
+    setNodes(nextNodes);
+  }, [features, ready]);
+
+  const expandCluster = (clusterId: number, lng: number, lat: number) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const zoom = Math.min(17, index.getClusterExpansionZoom(clusterId));
+    map.easeTo({ center: [lng, lat], zoom, duration: 500 });
+  };
 
   const recenter = () => {
     const map = mapRef.current;
     if (locationStatus === 'granted' && userLocation && map) {
-      map.flyTo({
-        center: [userLocation.lng, userLocation.lat],
-        zoom: 14.5,
-        speed: 1.2,
-        essential: true,
-      });
+      map.flyTo({ center: [userLocation.lng, userLocation.lat], zoom: 14.5, speed: 1.2, essential: true });
     } else {
       onRequestLocation();
     }
   };
+
+  const emptyMessage =
+    candidates.length === 0
+      ? 'The city is quiet right now — check back soon'
+      : usingFallback
+        ? "Nothing live right now — here's what's happening tonight"
+        : null;
 
   return (
     <div className="absolute inset-0">
@@ -214,10 +317,10 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
 
       {errorVariant && <MapErrorState variant={errorVariant} />}
 
-      {!errorVariant && ready && visibleIds.size === 0 && (
-        <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center px-8">
-          <div className="glass rounded-full px-4 py-2 text-sm font-medium text-stone-300">
-            Nothing here right now — try another filter
+      {!errorVariant && ready && emptyMessage && (
+        <div className="pointer-events-none safe-top absolute inset-x-0 top-28 flex justify-center px-8">
+          <div className="glass rounded-full px-4 py-2 text-center text-sm font-medium text-stone-200">
+            {emptyMessage}
           </div>
         </div>
       )}
@@ -225,43 +328,46 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
       {!errorVariant && (
         <div className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end px-4 pb-2">
           <div className="pointer-events-auto">
-            <RecenterButton
-              onClick={recenter}
-              active={locationStatus === 'granted' && !!userLocation}
-            />
+            <RecenterButton onClick={recenter} active={locationStatus === 'granted' && !!userLocation} />
           </div>
         </div>
       )}
 
       {userNode && userLocation && createPortal(<UserLocationMarker />, userNode)}
 
-      {activities.map((activity) => {
-        const node = markerNodes.get(activity.id);
+      {features.map((f) => {
+        const node = nodes.get(f.key);
         if (!node) return null;
-
-        const displayStatus = displayStatuses.get(activity.id) ?? 'unverified';
-        const intensity = intensities.get(activity.id) ?? 0.3;
-        const emphasis = emphases.get(activity.id) ?? 0.5;
-        const visible =
-          displayStatus !== 'ended' && visibleIds.has(activity.id);
-
-        node.style.zIndex = String(getBubbleMotion(intensity, emphasis).zIndex);
-
+        if (f.kind === 'cluster') {
+          return createPortal(
+            <AnimatePresence>
+              <ClusterBubble
+                count={f.count ?? 0}
+                intensity={f.intensity}
+                onClick={() => expandCluster(f.clusterId!, f.lng, f.lat)}
+              />
+            </AnimatePresence>,
+            node,
+            f.key,
+          );
+        }
+        const activity = f.activityId ? activityById.get(f.activityId) : undefined;
+        if (!activity) return null;
+        const status = deriveDisplayStatus(activity, now);
+        const intensity = INTENSITY_BY_TIME_STATE[deriveTimeState(activity, now)];
         return createPortal(
           <AnimatePresence>
-            {visible && (
-              <ActivityBubble
-                activity={activity}
-                displayStatus={displayStatus}
-                intensity={intensity}
-                emphasis={emphasis}
-                selected={selectedActivityId === activity.id}
-                onSelect={selectActivity}
-              />
-            )}
+            <ActivityBubble
+              activity={activity}
+              displayStatus={status}
+              intensity={intensity}
+              emphasis={f.intensity}
+              selected={selectedActivityId === activity.id}
+              onSelect={selectActivity}
+            />
           </AnimatePresence>,
           node,
-          activity.id,
+          f.key,
         );
       })}
     </div>

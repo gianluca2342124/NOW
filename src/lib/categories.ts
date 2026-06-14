@@ -56,12 +56,14 @@ export interface DisplayStatusConfig {
 }
 
 export const DISPLAY_STATUS_CONFIG: Record<DisplayStatus, DisplayStatusConfig> = {
-  live_now: { label: 'Live now', color: '#f59e0b', hot: true },
+  verified_live: { label: 'Live now', color: '#f59e0b', hot: true },
+  happening_now: { label: 'Happening now', color: '#38bdf8', hot: true },
   starting_soon: { label: 'Starting soon', color: '#fbbf24', hot: false },
   tonight: { label: 'Tonight', color: '#7dd3fc', hot: false },
+  today: { label: 'Today', color: '#a5b4fc', hot: false },
   tomorrow: { label: 'Tomorrow', color: '#94a3b8', hot: false },
+  upcoming: { label: 'Upcoming', color: '#94a3b8', hot: false },
   ended: { label: 'Ended', color: '#78716c', hot: false },
-  unverified: { label: 'Unverified', color: '#a8a29e', hot: false },
 };
 
 /**

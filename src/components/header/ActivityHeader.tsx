@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Activity } from '@/types/activity';
-import { deriveTimeState } from '@/lib/status';
+import { isEnded, isInNowTab, isTonightish } from '@/lib/status';
 import { distanceKm } from '@/lib/geo';
 import { isCuratedPreview, realSourceNames } from '@/lib/verification';
 import { useNowStore } from '@/store/useNowStore';
@@ -22,18 +22,14 @@ export function ActivityHeader({ activities, now }: ActivityHeaderProps) {
   const userLocation = useNowStore((s) => s.userLocation);
 
   const { onNow, tonight, nearby, curated, sources } = useMemo(() => {
+    const visible = activities.filter((a) => !a.hidden && !isEnded(a, now));
     let onNowCount = 0;
     let tonightCount = 0;
     let nearbyCount = 0;
-    for (const a of activities) {
-      const ts = deriveTimeState(a, now);
-      if (ts === 'ongoing') onNowCount += 1;
-      if (ts === 'soon' || ts === 'today') tonightCount += 1;
-      if (
-        userLocation &&
-        ts !== 'ended' &&
-        distanceKm(userLocation, a.coordinates) <= NEARBY_KM
-      ) {
+    for (const a of visible) {
+      if (isInNowTab(a, now)) onNowCount += 1;
+      if (isTonightish(a, now)) tonightCount += 1;
+      if (userLocation && distanceKm(userLocation, a.coordinates) <= NEARBY_KM) {
         nearbyCount += 1;
       }
     }
@@ -41,8 +37,8 @@ export function ActivityHeader({ activities, now }: ActivityHeaderProps) {
       onNow: onNowCount,
       tonight: tonightCount,
       nearby: nearbyCount,
-      curated: isCuratedPreview(activities),
-      sources: realSourceNames(activities),
+      curated: isCuratedPreview(visible),
+      sources: realSourceNames(visible),
     };
   }, [activities, now, userLocation]);
 

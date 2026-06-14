@@ -52,14 +52,16 @@ export type VerificationStatus =
   | 'community_reported'
   | 'unknown';
 
-/** What the user is shown. Derived, never stored. */
+/** What the user is shown. Derived, never stored. Status Engine V2. */
 export type DisplayStatus =
-  | 'live_now'
+  | 'verified_live'
+  | 'happening_now'
   | 'starting_soon'
   | 'tonight'
+  | 'today'
   | 'tomorrow'
-  | 'ended'
-  | 'unverified';
+  | 'upcoming'
+  | 'ended';
 
 /** Factual time bucket, independent of trust. Derived. */
 export type TimeState =
@@ -115,6 +117,21 @@ export interface Activity {
   priceLabel: string; // "Free", "From €15", "€€"
   description: string;
   tags: string[];
+
+  // --- Intelligence & future admin/business hooks (Phase 5 & 8) ---
+  /** Editorially featured → large pulse boost. */
+  featured?: boolean;
+  /** Manual ranking nudge -1..1, added into pulse. */
+  manualImportance?: number;
+  /** Removes the activity from the feed entirely. */
+  hidden?: boolean;
+  /** Paid/promoted placement (no monetization yet — ranking hook only). */
+  promoted?: boolean;
+  /** Future venue/organizer/creator account association. */
+  venueId?: string;
+  organizerId?: string;
+  /** Future affiliate ticketing link. */
+  affiliateUrl?: string;
 }
 
 /** Merged source attribution carried by a deduplicated activity. */

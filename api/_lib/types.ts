@@ -69,6 +69,15 @@ export interface Activity {
   priceLabel: string;
   description: string;
   tags: string[];
+
+  // Intelligence & future admin/business hooks (Phase 5 & 8).
+  featured?: boolean;
+  manualImportance?: number;
+  hidden?: boolean;
+  promoted?: boolean;
+  venueId?: string;
+  organizerId?: string;
+  affiliateUrl?: string;
 }
 
 /** A loose record emitted by a source before normalization. */
@@ -86,6 +95,10 @@ export interface RawActivity {
   priceLabel?: string;
   importance?: number;
   tags?: string[];
+  featured?: boolean;
+  hidden?: boolean;
+  manualImportance?: number;
+  promoted?: boolean;
   /** Optional source-provided presentation (overrides category defaults). */
   activityLabel?: string;
   shortMapLabel?: string;

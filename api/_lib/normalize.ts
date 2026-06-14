@@ -57,6 +57,11 @@ export function normalize(
     priceLabel: raw.priceLabel?.trim() || 'See source',
     description: raw.description?.trim() || `${raw.title.trim()} — via ${source.sourceName}.`,
     tags: raw.tags ?? [],
+    // Auto-feature high-signal events until an admin layer exists (Phase 5).
+    featured: raw.featured ?? (raw.importance ?? 0) >= 0.85,
+    hidden: raw.hidden ?? false,
+    manualImportance: raw.manualImportance,
+    promoted: raw.promoted,
   };
 }
 

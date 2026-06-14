@@ -41,7 +41,7 @@ function ActivityBubbleBase({
   const m = getBubbleMotion(intensity, emphasis);
   const reduceMotion = useReducedMotion();
 
-  const isLive = displayStatus === 'live_now';
+  const isLive = displayStatus === 'verified_live';
   const verification = effectiveVerification(activity);
   const trusted =
     verification === 'official_source' || verification === 'verified';

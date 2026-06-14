@@ -1,5 +1,5 @@
 import type { Activity, EventCategory } from '@/types/activity';
-import { deriveTimeState } from '@/lib/status';
+import { deriveDisplayStatus, isInNowTab, isTonightish } from '@/lib/status';
 
 export type TimeFilter = 'now' | 'tonight' | 'tomorrow';
 
@@ -12,26 +12,15 @@ export const TIME_FILTERS: { id: TimeFilter; label: string }[] = [
 /** Internal trust filter — not yet exposed in the UI (see TRUST_MODEL.md). */
 export type TrustFilter = 'all' | 'verified_plus';
 
-/**
- * Time filtering uses the FACTUAL time-state, not the display label — filtering
- * by when things actually happen is always honest; only the "live" *claim* is
- * gated.
- */
-export function passesTimeFilter(
-  activity: Activity,
-  filter: TimeFilter,
-  now: number,
-): boolean {
-  const ts = deriveTimeState(activity, now);
-  if (ts === 'ended') return false;
-
+/** Time filtering via Status Engine V2 (see lib/status). */
+export function passesTimeFilter(activity: Activity, filter: TimeFilter, now: number): boolean {
   switch (filter) {
     case 'now':
-      return ts === 'ongoing' || ts === 'soon';
+      return isInNowTab(activity, now);
     case 'tonight':
-      return ts === 'ongoing' || ts === 'soon' || ts === 'today';
+      return isTonightish(activity, now);
     case 'tomorrow':
-      return ts === 'tomorrow';
+      return deriveDisplayStatus(activity, now) === 'tomorrow';
     default:
       return true;
   }

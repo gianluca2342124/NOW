@@ -380,6 +380,7 @@ export const CURATED_ACTIVITIES: Activity[] = [
     description:
       'Scheduled LaLiga fixture per the official club schedule. Shown as a scheduled fixture, not a live claim.',
     tags: ['football', 'laliga', 'fixture'],
+    featured: true,
   },
   {
     id: 'palau-blaugrana-basket',
@@ -428,6 +429,7 @@ export const CURATED_ACTIVITIES: Activity[] = [
     priceLabel: 'From €65',
     description: 'Daytime stages of the electronic & advanced music festival.',
     tags: ['festival', 'electronic'],
+    featured: true,
   },
   {
     id: 'palo-alto-market',
