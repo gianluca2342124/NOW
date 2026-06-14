@@ -1,10 +1,47 @@
 import type { Activity } from './_lib/types';
 import { SERVER_SOURCES } from './_lib/sources/registry';
-import { normalize } from './_lib/normalize';
+import { normalize, dropReason } from './_lib/normalize';
 import { dedupeActivities } from './_lib/dedupe';
 import { curatedFallback } from './_lib/curatedFallback';
+import { loadBarcelonaOpenData } from './_lib/sources/barcelonaOpenData';
 
 export const config = { runtime: 'edge' };
+
+function json(body: unknown, cacheControl: string): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': cacheControl },
+  });
+}
+
+/** Temporary diagnostics for /api/activities?debug=1 — Barcelona Open Data. */
+async function buildDebug(now: number) {
+  const { activities: raws, debug } = await loadBarcelonaOpenData(now);
+  const normalizeDropReasons: Record<string, number> = {};
+  let normalizedCount = 0;
+  for (const raw of raws) {
+    const reason = dropReason(raw, now);
+    if (reason) normalizeDropReasons[reason] = (normalizeDropReasons[reason] ?? 0) + 1;
+    else normalizedCount += 1;
+  }
+  return {
+    generatedAt: new Date(now).toISOString(),
+    barcelonaOpenData: {
+      datasetIdsAttempted: debug.datasetIdsAttempted,
+      packageShow: debug.packageShow,
+      selectedResourceId: debug.selectedResourceId,
+      datastoreQueryMethod: debug.queryMethod,
+      datastoreOk: debug.datastoreOk,
+      rawRecordCount: debug.rawRecordCount,
+      sampleRecordKeys: debug.sampleRecordKeys,
+      parsedCount: debug.parsedCount,
+      parseDropReasons: debug.parseDropReasons,
+      normalizedCount,
+      droppedCount: raws.length - normalizedCount,
+      normalizeDropReasons,
+    },
+  };
+}
 
 /**
  * GET /api/activities
@@ -17,8 +54,13 @@ export const config = { runtime: 'edge' };
  * The Eventbrite/Ticketmaster/Songkick keys (when present) live server-side
  * only — they are never sent to the client.
  */
-export default async function handler(_req: Request): Promise<Response> {
+export default async function handler(req: Request): Promise<Response> {
   const now = Date.now();
+
+  if (new URL(req.url).searchParams.get('debug') === '1') {
+    return json(await buildDebug(now), 'no-store');
+  }
+
   const sources = SERVER_SOURCES.filter((s) => s.isEnabled());
 
   const settled = await Promise.allSettled(

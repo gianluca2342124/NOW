@@ -18,14 +18,11 @@ export function normalize(
   source: ServerSource,
   now: number,
 ): Activity | null {
-  const lat = raw.coordinates?.lat;
-  const lng = raw.coordinates?.lng;
-  if (!isFiniteCoord(lat) || !isFiniteCoord(lng)) return null;
-  if (!withinBarcelona(lat, lng)) return null;
+  if (dropReason(raw, now)) return null;
 
+  const lat = raw.coordinates.lat;
+  const lng = raw.coordinates.lng;
   const start = Date.parse(raw.startsAt);
-  if (Number.isNaN(start)) return null;
-
   const end = raw.endsAt ? Date.parse(raw.endsAt) : NaN;
   const endsAt = Number.isNaN(end) ? null : new Date(end).toISOString();
 
@@ -61,6 +58,19 @@ export function normalize(
     description: raw.description?.trim() || `${raw.title.trim()} — via ${source.sourceName}.`,
     tags: raw.tags ?? [],
   };
+}
+
+/**
+ * Why a raw record can't be turned into a usable Activity, or null if it's fine.
+ * Exposed so /api/activities?debug=1 can report drop reasons.
+ */
+export function dropReason(raw: RawActivity, _now: number): string | null {
+  const lat = raw.coordinates?.lat;
+  const lng = raw.coordinates?.lng;
+  if (!isFiniteCoord(lat) || !isFiniteCoord(lng)) return 'no_coords';
+  if (!withinBarcelona(lat, lng)) return 'outside_bcn';
+  if (Number.isNaN(Date.parse(raw.startsAt))) return 'invalid_start';
+  return null;
 }
 
 function baselineConfidence(status: ServerSource['verificationBaseline']): number {
