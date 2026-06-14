@@ -39,6 +39,10 @@ async function buildDebug(now: number) {
       afterNameDedupe: debug.afterNameDedupe,
       finalCount: debug.finalCount,
       dropReasons: debug.dropReasons,
+      preBalanceDistribution: debug.preBalanceDistribution,
+      postBalanceDistribution: debug.postBalanceDistribution,
+      categoryCaps: debug.categoryCaps,
+      maxShare: debug.maxShare,
       categoryDistribution: debug.categoryDistribution,
       // normalize stage (bbox/date validity on the final set)
       normalizedCount,

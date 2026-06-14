@@ -1,6 +1,13 @@
-import type { RawActivity, ServerSource } from '../types';
+import type { EventCategory, RawActivity, ServerSource } from '../types';
 import { fetchJson, parseLooseDate, pick, toNumber } from '../http';
-import { classify, rankScore, timeRelevance } from '../quality';
+import {
+  balanceFeed,
+  classify,
+  isOneOff,
+  isPrecise,
+  rankScore,
+  timeRelevance,
+} from '../quality';
 
 /**
  * Barcelona Open Data — "Agenda d'actes i activitats de la ciutat de Barcelona"
@@ -47,6 +54,10 @@ export interface BcnDebug {
   afterParse: number;
   afterNameDedupe: number;
   finalCount: number;
+  preBalanceDistribution: Record<string, number>;
+  postBalanceDistribution: Record<string, number>;
+  categoryCaps: Record<string, number>;
+  maxShare: number;
   categoryDistribution: Record<string, number>;
 }
 
@@ -231,6 +242,10 @@ export async function loadBarcelonaOpenData(
     afterParse: 0,
     afterNameDedupe: 0,
     finalCount: 0,
+    preBalanceDistribution: {},
+    postBalanceDistribution: {},
+    categoryCaps: {},
+    maxShare: 0,
     categoryDistribution: {},
   };
 
@@ -265,6 +280,7 @@ export async function loadBarcelonaOpenData(
   // 3) Parse → classify → filter; rank each survivor.
   interface Ranked {
     raw: RawActivity;
+    category: EventCategory;
     rank: number;
     startMs: number;
     nameKey: string;
@@ -294,11 +310,14 @@ export async function loadBarcelonaOpenData(
     const startMs = Date.parse(raw.startsAt);
     const endMs = raw.endsAt ? Date.parse(raw.endsAt) : null;
     const tRel = timeRelevance(startMs, endMs, now);
-    raw.importance = clamp01(0.6 * cls.quality + 0.4 * tRel);
+    const oneOff = isOneOff(startMs, endMs);
+    const precise = isPrecise(startMs);
+    raw.importance = clamp01(0.55 * cls.quality + 0.45 * tRel);
 
     ranked.push({
       raw,
-      rank: rankScore(cls.quality, tRel),
+      category: cls.category,
+      rank: rankScore(cls.quality, tRel, oneOff, precise),
       startMs,
       nameKey: `${slugKey(raw.title)}|${slugKey(raw.venueName ?? '')}`,
     });
@@ -321,10 +340,15 @@ export async function loadBarcelonaOpenData(
   const deduped = [...byName.values()];
   debug.afterNameDedupe = deduped.length;
 
-  // 5) Rank, cap, and record category distribution.
-  deduped.sort((a, b) => b.rank - a.rank);
-  const out = deduped.slice(0, MAX_OUTPUT).map((r) => r.raw);
-  for (const a of out) bump(debug.categoryDistribution, a.category);
+  // 5) Diversity balancing: caps + max-share so no category dominates.
+  const balanced = balanceFeed(deduped, MAX_OUTPUT);
+  debug.preBalanceDistribution = balanced.preBalance;
+  debug.postBalanceDistribution = balanced.postBalance;
+  debug.categoryCaps = balanced.caps;
+  debug.maxShare = balanced.maxShare;
+  debug.categoryDistribution = balanced.postBalance;
+
+  const out = balanced.selected.map((r) => r.raw);
   debug.finalCount = out.length;
 
   return { activities: out, debug };
