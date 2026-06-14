@@ -66,6 +66,7 @@ function timeRelevance(activity: Activity, now: number): number {
 function proximityScore(activity: Activity, userLocation: LngLat | null): number {
   if (!userLocation) return 0.5; // neutral without a location
   const km = distanceKm(userLocation, activity.coordinates);
+  if (!Number.isFinite(km)) return 0.5; // guard against NaN coords
   return Math.max(0, 1 - km / PROXIMITY_FALLOFF_KM);
 }
 
@@ -102,5 +103,6 @@ export function pulseScore(activity: Activity, now: number, userLocation: LngLat
   if (activity.promoted) score += PROMOTED_BOOST;
   if (activity.manualImportance) score += activity.manualImportance * 20;
 
+  if (!Number.isFinite(score)) return 0; // never let NaN poison ranking
   return Math.round(Math.min(100, Math.max(0, score)));
 }

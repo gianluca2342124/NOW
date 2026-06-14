@@ -133,27 +133,30 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
   }, [userLocation, ready]);
 
   // --- Pulse-ranked candidate set + empty-state fallback (Phase 3 & 6) ---
-  const { candidates, usingFallback } = useMemo(() => {
+  const { candidates, fallbackMode } = useMemo(() => {
     const alive = activities.filter((a) => !a.hidden && !isEnded(a, now));
+    const inCategory = (a: Activity) =>
+      activeCategories.size === 0 || activeCategories.has(a.category);
+    const allowed = (a: Activity) => inCategory(a) && passesTrustFilter(a, trustFilter);
 
-    const matched = alive.filter(
-      (a) =>
-        passesTimeFilter(a, timeFilter, now) &&
-        (activeCategories.size === 0 || activeCategories.has(a.category)) &&
-        passesTrustFilter(a, trustFilter),
-    );
+    const matched = alive.filter((a) => passesTimeFilter(a, timeFilter, now) && allowed(a));
 
-    // The map should never feel empty: if "Now" is empty, surface tonight.
-    let fallback = false;
+    // The map must never feel empty: when "Now" is empty, fall back first to
+    // tonight, then to anything upcoming, so real activity is always surfaced.
     let pool = matched;
+    let mode: 'none' | 'tonight' | 'upcoming' = 'none';
     if (matched.length === 0 && timeFilter === 'now') {
-      pool = alive.filter(
-        (a) =>
-          isTonightish(a, now) &&
-          (activeCategories.size === 0 || activeCategories.has(a.category)) &&
-          passesTrustFilter(a, trustFilter),
-      );
-      fallback = pool.length > 0;
+      const tonightPool = alive.filter((a) => isTonightish(a, now) && allowed(a));
+      if (tonightPool.length > 0) {
+        pool = tonightPool;
+        mode = 'tonight';
+      } else {
+        const upcomingPool = alive.filter(allowed);
+        if (upcomingPool.length > 0) {
+          pool = upcomingPool;
+          mode = 'upcoming';
+        }
+      }
     }
 
     const ranked = pool
@@ -162,7 +165,38 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
       .slice(0, MAX_MAP_ACTIVITIES)
       .map((r) => r.a);
 
-    return { candidates: ranked, usingFallback: fallback };
+    if (import.meta.env.DEV) {
+      const pulses = pool.map((a) => pulseScore(a, now, userLocation));
+      // eslint-disable-next-line no-console
+      console.debug('[NOW feed]', {
+        totalActivities: activities.length,
+        alive: alive.length,
+        timeFilter,
+        activeCategories: [...activeCategories],
+        trustFilter,
+        matched: matched.length,
+        fallbackMode: mode,
+        poolBeforeCap: pool.length,
+        candidatesAfterCap: ranked.length,
+        pulseMin: pulses.length ? Math.min(...pulses) : null,
+        pulseMax: pulses.length ? Math.max(...pulses) : null,
+        pulseAvg: pulses.length
+          ? Math.round(pulses.reduce((s, p) => s + p, 0) / pulses.length)
+          : null,
+      });
+      // Defensive invariant (Phase 6 task 6).
+      if (alive.length > 0 && ranked.length === 0) {
+        // eslint-disable-next-line no-console
+        console.warn('[NOW] invariant violated: alive>0 but 0 visible', {
+          alive: alive.length,
+          timeFilter,
+          activeCategories: [...activeCategories],
+          trustFilter,
+        });
+      }
+    }
+
+    return { candidates: ranked, fallbackMode: mode };
   }, [activities, now, timeFilter, activeCategories, trustFilter, userLocation]);
 
   const activityById = useMemo(() => {
@@ -231,6 +265,16 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
           intensity: (pulseById.get(id) ?? 0) / 100,
         };
       });
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.debug('[NOW clusters]', {
+          clusterInputPoints: candidates.length,
+          renderedFeatures: next.length,
+          clusters: next.filter((f) => f.kind === 'cluster').length,
+          leaves: next.filter((f) => f.kind === 'leaf').length,
+          zoom: Math.round(map.getZoom()),
+        });
+      }
       setFeatures(next);
     };
 
@@ -299,9 +343,11 @@ export function MapView({ activities, now, onRequestLocation }: MapViewProps) {
   const emptyMessage =
     candidates.length === 0
       ? 'The city is quiet right now — check back soon'
-      : usingFallback
-        ? "Nothing live right now — here's what's happening tonight"
-        : null;
+      : fallbackMode === 'tonight'
+        ? "Nothing live right now — showing tonight's best"
+        : fallbackMode === 'upcoming'
+          ? "Nothing live right now — showing what's coming up"
+          : null;
 
   return (
     <div className="absolute inset-0">

@@ -77,6 +77,16 @@ function fmt(ts: number): string {
   return new Date(ts).toISOString().slice(0, 19);
 }
 
+/** CKAN is intermittently slow — one retry, bounded so we stay within the edge
+ * function's time budget. */
+async function tryJson<T>(url: string): Promise<T | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const res = await fetchJson<T>(url, {}, 6000);
+    if (res) return res;
+  }
+  return null;
+}
+
 function bump(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1;
 }
@@ -88,7 +98,7 @@ async function discoverResourceId(
   const envId = process.env.BCN_OPENDATA_RESOURCE_ID?.trim();
   if (envId) return envId;
 
-  const ps = await fetchJson<PackageShow>(
+  const ps = await tryJson<PackageShow>(
     `${CKAN_BASE}/package_show?id=${encodeURIComponent(datasetId)}`,
   );
   const resources = ps?.result?.resources;
@@ -131,7 +141,7 @@ async function queryRecords(
     `WHERE ("end_date" >= '${nowStr}' OR "start_date" >= '${nowStr}') ` +
     `AND "start_date" <= '${farStr}' ` +
     `ORDER BY "start_date" ASC LIMIT ${RECORD_LIMIT}`;
-  const sqlRes = await fetchJson<DatastoreResult>(
+  const sqlRes = await tryJson<DatastoreResult>(
     `${CKAN_BASE}/datastore_search_sql?sql=${encodeURIComponent(sql)}`,
   );
   if (sqlRes?.result?.records?.length) {
@@ -141,7 +151,7 @@ async function queryRecords(
   }
 
   // 2) Plain search fallback (filtered to the window in code below).
-  const plain = await fetchJson<DatastoreResult>(
+  const plain = await tryJson<DatastoreResult>(
     `${CKAN_BASE}/datastore_search?resource_id=${encodeURIComponent(
       resourceId,
     )}&limit=${RECORD_LIMIT}`,

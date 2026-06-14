@@ -23,6 +23,9 @@ interface Feed {
   activities: Activity[];
   sources: string[];
   fallback: boolean;
+  /** A primary source (Barcelona Open Data) is missing — cache briefly so the
+   * feed recovers fast instead of serving a thin TM-only response for 10 min. */
+  degraded: boolean;
 }
 
 /** Run every enabled source → normalize → drop hidden → dedupe → sort. */
@@ -54,7 +57,8 @@ async function assembleFeed(now: number): Promise<Feed> {
     activities = curatedFallback(now);
     fallback = true;
   }
-  return { activities, sources: contributing, fallback };
+  const degraded = fallback || !contributing.includes('Barcelona Open Data');
+  return { activities, sources: contributing, fallback, degraded };
 }
 
 function countBy<T extends string>(items: T[]): Record<string, number> {
@@ -160,14 +164,18 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const feed = await assembleFeed(now);
+  const cache = feed.degraded
+    ? 's-maxage=60, stale-while-revalidate=120'
+    : 's-maxage=600, stale-while-revalidate=1200';
   return json(
     {
       generatedAt: new Date(now).toISOString(),
       sources: feed.sources,
       fallback: feed.fallback,
+      degraded: feed.degraded,
       count: feed.activities.length,
       activities: feed.activities,
     },
-    's-maxage=600, stale-while-revalidate=1200',
+    cache,
   );
 }
